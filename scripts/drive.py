@@ -51,6 +51,7 @@ def cdp_eval(expression):
     targets = requests.get(f"http://localhost:{CDP_PORT}/json", timeout=10).json()
     page = next(t for t in targets if t.get("type") == "page" and f":{PORT}/" in t.get("url", ""))
     ws = websocket.create_connection(page["webSocketDebuggerUrl"], timeout=10, suppress_origin=True)
+    ws.settimeout(10)
     ws.send(json.dumps({"id": 1, "method": "Runtime.evaluate", "params": {"expression": expression, "returnByValue": True}}))
     while True:
         msg = json.loads(ws.recv())
@@ -142,6 +143,12 @@ def run(page, prefix, out, tag, result):
         raise RuntimeError(f"page never loaded over CDP: {last!r}")
     phase(f"page loaded: {cdp_eval('location.href')}")
 
+    phase(f"before field lookup: {d.app_current()}")
+    d.screenshot(f"{out}/{tag}-loaded.png")
+    if d.app_current().get("package") != CHROME:
+        adb("shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", url, CHROME)
+        time.sleep(3)
+        phase(f"re-foregrounded: {d.app_current()}")
     # Chrome exposes the contenteditable as an EditText; tapping it focuses it and raises Gboard.
     field = d(className="android.widget.EditText")
     if not field.wait(timeout=20):

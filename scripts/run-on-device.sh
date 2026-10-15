@@ -17,6 +17,10 @@ a shell am set-debug-app --persistent com.android.chrome
 a shell 'echo "_ --disable-fre --no-default-browser-check --no-first-run --disable-features=SigninPromo" > /data/local/tmp/chrome-command-line'
 a shell cat /data/local/tmp/chrome-command-line
 
+log "soft keyboard"
+a shell settings put secure show_ime_with_hard_keyboard 1
+a shell settings get secure show_ime_with_hard_keyboard
+
 log "http server"
 (cd page/dist && exec python3 -u -m http.server 8765 < /dev/null > ../../out/http.log 2>&1) &
 server=$!
