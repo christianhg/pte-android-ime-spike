@@ -1,0 +1,16 @@
+{
+  "name": "pte-android-ime-spike-page",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/editor.tsx --bundle --minify --format=esm --outfile=dist/editor.js --jsx=automatic --define:process.env.NODE_ENV='\"production\"' && cp src/*.html dist/"
+  },
+  "dependencies": {
+    "@portabletext/editor": "8.2.4",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

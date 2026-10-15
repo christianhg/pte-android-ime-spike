@@ -1,0 +1,73 @@
+name: gboard-ime
+
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      locale:
+        description: Emulator locale (ja-JP makes Gboard enable Japanese on first run, if it does that at all)
+        default: ja-JP
+
+jobs:
+  emulator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        attempt: [1, 2, 3, 4, 5]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: KVM probe
+        run: |
+          ls -l /dev/kvm || echo "NO /dev/kvm"
+          grep -cE 'vmx|svm' /proc/cpuinfo || true
+
+      - name: Enable KVM group perms
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Build test page
+        working-directory: page
+        run: npm install --no-audit --no-fund && npm run build
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: pip install -r scripts/requirements.txt
+
+      - name: Record start
+        run: mkdir -p out && echo "EMULATOR_START at $(date +%s)" | tee out/timing.txt
+
+      - name: Run on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis_playstore
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -change-locale ${{ inputs.locale || 'ja-JP' }}
+          script: scripts/run-on-device.sh
+
+      - name: Boot time
+        if: always()
+        run: |
+          s=$(grep EMULATOR_START out/timing.txt | awk '{print $3}')
+          b=$(grep BOOTED out/timing.txt | awk '{print $3}')
+          [ -n "$s" ] && [ -n "$b" ] && echo "BOOT_SECONDS $((b - s))"
+          grep RESULT out/drive.log || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: out-${{ matrix.attempt }}
+          path: out/

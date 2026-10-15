@@ -1,0 +1,17 @@
+<!doctype html>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>plain</title>
+<div id="ed" contenteditable="true" style="border:1px solid #888;min-height:3em;font-size:20px"></div>
+<pre id="log" style="font-size:10px"></pre>
+<script>
+  const ed = document.getElementById('ed')
+  const events = []
+  for (const t of ['beforeinput', 'input', 'compositionstart', 'compositionupdate', 'compositionend']) {
+    ed.addEventListener(t, (e) => {
+      events.push({type: t, inputType: e.inputType, data: e.data, text: ed.textContent})
+      document.getElementById('log').textContent = events.map((x) => JSON.stringify(x)).join('\n')
+    })
+  }
+  window.__state = () => ({text: ed.textContent, events})
+  ed.focus()
+</script>
