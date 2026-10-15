@@ -49,7 +49,7 @@ jobs:
         run: mkdir -p out && echo "EMULATOR_START at $(date +%s)" | tee out/timing.txt
 
       - name: Run on emulator
-        timeout-minutes: 12
+        timeout-minutes: 16
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
@@ -57,6 +57,9 @@ jobs:
           arch: x86_64
           profile: pixel_6
           disable-animations: true
+          ram-size: 4096M
+          cores: 4
+          heap-size: 512M
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim ${{ inputs.locale }}
           script: scripts/run-on-device.sh
 

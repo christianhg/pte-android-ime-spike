@@ -8,6 +8,16 @@ log() { echo "PHASE $(date +%H:%M:%S) $*" | tee -a "$out/phases.log"; }
 a() { timeout 60 adb "$@"; local rc=$?; [ $rc -eq 124 ] && log "TIMEOUT adb $*"; return $rc; }
 
 echo "BOOTED at $(date +%s)" | tee -a "$out/timing.txt"
+# Play services runs a startup storm after boot. Chrome depends on its font provider and gets killed
+# when it ANRs, so wait until the system has been free of ANRs for 30s (max 4 min).
+log "settle start"
+quiet=0
+for i in $(seq 1 48); do
+  if timeout 20 adb logcat -d -b events 2>/dev/null | grep -q "am_anr"; then quiet=0; timeout 10 adb logcat -b events -c; else quiet=$((quiet + 5)); fi
+  [ $quiet -ge 30 ] && break
+  sleep 5
+done
+log "settle done after $((i * 5))s quiet=$quiet"
 log "diagnose start"
 timeout 120 scripts/diagnose.sh "$out" || log "diagnose rc=$?"
 
