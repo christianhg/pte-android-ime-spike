@@ -5,6 +5,7 @@ Usage: python drive.py <page> <prefix> <outdir>
   prefix: existing text in the block ('' for the empty-block case)
 """
 
+import faulthandler
 import json
 import os
 import subprocess
@@ -21,8 +22,29 @@ PORT = 8765
 CDP_PORT = 9222
 
 
+T0 = time.time()
+
+
+def phase(msg):
+    print(f"PHASE +{time.time() - T0:5.1f}s {msg}", flush=True)
+
+
 def adb(*args):
-    return subprocess.run(["adb", *args], check=True, capture_output=True, text=True).stdout
+    return subprocess.run(["adb", *args], check=True, capture_output=True, text=True, timeout=30).stdout
+
+
+# Chrome's first-run and promo screens, in case the command-line flags are ignored on this build.
+FRE_BUTTONS = ["Use without an account", "Accept & continue", "No thanks", "No, thanks", "Got it", "Continue", "Skip"]
+
+
+def dismiss_chrome_screens(d):
+    for _ in range(6):
+        hit = next((b for b in FRE_BUTTONS if d(packageName=CHROME, text=b).exists), None)
+        if not hit:
+            return
+        phase(f"chrome screen: tapping {hit!r}")
+        d(packageName=CHROME, text=hit).click()
+        time.sleep(1.5)
 
 
 def cdp_eval(expression):
@@ -68,21 +90,68 @@ def main():
     os.makedirs(out, exist_ok=True)
     tag = f"{page.split('.')[0]}-{'empty' if not prefix else 'prefix'}"
     result = {"page": page, "prefix": prefix}
+    # Print every thread's stack shortly before the shell's timeout kills us.
+    faulthandler.dump_traceback_later(165, exit=False)
+    phase(f"start {tag}")
 
+    d = None
+    try:
+        d = run(page, prefix, out, tag, result)
+    except Exception:
+        phase("FAILED, dumping screen")
+        if d is None:
+            try:
+                d = u2.connect()
+            except Exception as e:
+                print(f"u2 connect for dump failed: {e!r}", flush=True)
+        if d is not None:
+            try:
+                with open(f"{out}/{tag}-fail.xml", "w") as f:
+                    f.write(d.dump_hierarchy())
+                d.screenshot(f"{out}/{tag}-fail.png")
+            except Exception as e:
+                print(f"dump failed: {e!r}", flush=True)
+        raise
+
+
+def run(page, prefix, out, tag, result):
     adb("reverse", f"tcp:{PORT}", f"tcp:{PORT}")
     adb("forward", f"tcp:{CDP_PORT}", "localabstract:chrome_devtools_remote")
-    url = f"http://localhost:{PORT}/{page}?prefix={prefix}"
-    adb("shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", url, CHROME)
-    time.sleep(5)
+    phase("adb reverse/forward set")
 
     d = u2.connect()
+    d.settings["wait_timeout"] = 10
+    phase(f"uiautomator2 up: {d.info.get('productName')} {d.window_size()}")
+
+    url = f"http://localhost:{PORT}/{page}?prefix={prefix}"
+    adb("shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", url, CHROME)
+    phase("chrome launched")
+    time.sleep(4)
+    dismiss_chrome_screens(d)
+    phase(f"foreground: {d.app_current()}")
+
+    last = None
+    for _ in range(20):
+        try:
+            if cdp_eval("document.readyState") == "complete" and cdp_eval("typeof window.__state") == "function":
+                break
+        except Exception as e:
+            last = e
+        time.sleep(1)
+    else:
+        raise RuntimeError(f"page never loaded over CDP: {last!r}")
+    phase(f"page loaded: {cdp_eval('location.href')}")
+
     # Chrome exposes the contenteditable as an EditText; tapping it focuses it and raises Gboard.
     field = d(className="android.widget.EditText")
-    field.wait(timeout=20)
+    if not field.wait(timeout=20):
+        raise RuntimeError("no EditText in Chrome")
     field.click()
     cdp_eval("(() => { const el = document.querySelector('[contenteditable]'); el.focus(); const r = document.createRange(); r.selectNodeContents(el); r.collapse(false); const s = getSelection(); s.removeAllRanges(); s.addRange(r); })()")
+    phase(f"field focused: activeElement={cdp_eval('document.activeElement && document.activeElement.isContentEditable')}")
     if not d(packageName=GBOARD).wait(timeout=15):
         raise RuntimeError("Gboard window did not appear")
+    phase("keyboard visible")
     time.sleep(1)
 
     with open(f"{out}/{tag}-keyboard.xml", "w") as f:
@@ -90,10 +159,12 @@ def main():
     d.screenshot(f"{out}/{tag}-keyboard.png")
     labels = sorted(gboard_keys(d))
     result["gboard_labels"] = labels
+    phase(f"keys found: {len(labels)} labels, sample {labels[:40]}")
 
     # Romaji on the Japanese QWERTY layout and plain English on the English layout use the same keys.
     for key in "kyou":
         tap_key(d, key)
+    phase("typed kyou")
     d.screenshot(f"{out}/{tag}-composing.png")
     result["composing"] = cdp_eval("window.__state()")
 
@@ -111,7 +182,8 @@ def main():
     with open(f"{out}/{tag}.json", "w") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
     print(f"RESULT {tag}: text={result['state']['text']!r} picked={result['picked']} "
-          f"compositionstart={sum(e['type'] == 'compositionstart' for e in result['state']['events'])}")
+          f"compositionstart={sum(e['type'] == 'compositionstart' for e in result['state']['events'])}", flush=True)
+    return d
 
 
 if __name__ == "__main__":
