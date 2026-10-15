@@ -43,6 +43,7 @@ for args in "plain.html ''" "editor.html ''" "editor.html x"; do
   log "case $1 prefix='$2' rc=$rc"
   [ "$rc" -ne 0 ] && status=1
   a shell am force-stop com.android.chrome
+  a shell rm -rf /data/data/com.android.chrome/app_tabs 2>/dev/null || true
 done
 a logcat -d -b crash > "$out/logcat-crash.txt"
 a shell dumpsys activity exit-info com.android.chrome > "$out/chrome-exit-info.txt"

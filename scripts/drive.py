@@ -20,6 +20,7 @@ GBOARD = "com.google.android.inputmethod.latin"
 CHROME = "com.android.chrome"
 PORT = 8765
 CDP_PORT = 9222
+CURRENT_URL = ""
 
 
 T0 = time.time()
@@ -49,7 +50,7 @@ def dismiss_chrome_screens(d):
 
 def cdp_eval(expression):
     targets = requests.get(f"http://localhost:{CDP_PORT}/json", timeout=10).json()
-    page = next(t for t in targets if t.get("type") == "page" and f":{PORT}/" in t.get("url", ""))
+    page = next(t for t in targets if t.get("type") == "page" and t.get("url", "").startswith(CURRENT_URL))
     ws = websocket.create_connection(page["webSocketDebuggerUrl"], timeout=10, suppress_origin=True)
     ws.settimeout(10)
     ws.send(json.dumps({"id": 1, "method": "Runtime.evaluate", "params": {"expression": expression, "returnByValue": True}}))
@@ -124,7 +125,9 @@ def run(page, prefix, out, tag, result):
     d.settings["wait_timeout"] = 10
     phase(f"uiautomator2 up: {d.info.get('productName')} {d.window_size()}")
 
+    global CURRENT_URL
     url = f"http://localhost:{PORT}/{page}?prefix={prefix}"
+    CURRENT_URL = url
     adb("shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", url, CHROME)
     phase("chrome launched")
     time.sleep(4)
@@ -167,7 +170,18 @@ def run(page, prefix, out, tag, result):
     time.sleep(1)
     cdp_eval("(() => { const el = document.querySelector('[contenteditable]'); el.focus(); const r = document.createRange(); r.selectNodeContents(el); r.collapse(false); const s = getSelection(); s.removeAllRanges(); s.addRange(r); })()")
     phase(f"field focused: activeElement={cdp_eval('document.activeElement && document.activeElement.isContentEditable')}")
-    if not d(packageName=GBOARD).wait(timeout=15):
+    for i in range(15):
+        ims = adb("shell", "dumpsys", "input_method")
+        shown = "mInputShown=true" in ims or "mIsInputViewShown=true" in ims
+        if shown:
+            break
+        time.sleep(1)
+    focus = [l.strip() for l in adb("shell", "dumpsys", "window").splitlines() if "mCurrentFocus" in l or "mInputMethodWindow" in l]
+    phase(f"ime shown={shown}, windows: {focus}")
+    phase(f"gboard in a11y tree: {d(packageName=GBOARD).exists}, chrome in a11y tree: {d(packageName=CHROME).exists}")
+    if not shown:
+        with open(f"{out}/{tag}-ims.txt", "w") as f:
+            f.write(ims)
         raise RuntimeError("Gboard window did not appear")
     phase("keyboard visible")
     time.sleep(1)
