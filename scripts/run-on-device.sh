@@ -21,6 +21,10 @@ log "soft keyboard"
 a shell settings put secure show_ime_with_hard_keyboard 1
 a shell settings get secure show_ime_with_hard_keyboard
 
+log "logcat"
+a logcat -c
+(timeout 900 adb logcat -v time > "$out/logcat.txt" 2>&1 &)
+
 log "http server"
 (cd page/dist && exec python3 -u -m http.server 8765 < /dev/null > ../../out/http.log 2>&1) &
 server=$!
@@ -40,6 +44,8 @@ for args in "plain.html ''" "editor.html ''" "editor.html x"; do
   [ "$rc" -ne 0 ] && status=1
   a shell am force-stop com.android.chrome
 done
+a logcat -d -b crash > "$out/logcat-crash.txt"
+a shell dumpsys activity exit-info com.android.chrome > "$out/chrome-exit-info.txt"
 a exec-out screencap -p > "$out/final.png"
 echo "DONE at $(date +%s)" | tee -a "$out/timing.txt"
 exit $status

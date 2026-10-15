@@ -138,6 +138,7 @@ def run(page, prefix, out, tag, result):
                 break
         except Exception as e:
             last = e
+            phase(f"cdp not ready: {e!r}")
         time.sleep(1)
     else:
         raise RuntimeError(f"page never loaded over CDP: {last!r}")
@@ -151,7 +152,12 @@ def run(page, prefix, out, tag, result):
         phase(f"re-foregrounded: {d.app_current()}")
     # Chrome exposes the contenteditable as an EditText; tapping it focuses it and raises Gboard.
     field = d(className="android.widget.EditText")
-    if not field.wait(timeout=20):
+    for i in range(10):
+        if field.exists:
+            break
+        phase(f"waiting for EditText {i}: {d.app_current()}")
+        time.sleep(2)
+    else:
         raise RuntimeError("no EditText in Chrome")
     field.click()
     cdp_eval("(() => { const el = document.querySelector('[contenteditable]'); el.focus(); const r = document.createRange(); r.selectNodeContents(el); r.collapse(false); const s = getSelection(); s.removeAllRanges(); s.addRange(r); })()")
