@@ -170,11 +170,21 @@ def run(page, prefix, out, tag, result):
     time.sleep(1)
     cdp_eval("(() => { const el = document.querySelector('[contenteditable]'); el.focus(); const r = document.createRange(); r.selectNodeContents(el); r.collapse(false); const s = getSelection(); s.removeAllRanges(); s.addRange(r); })()")
     phase(f"field focused: activeElement={cdp_eval('document.activeElement && document.activeElement.isContentEditable')}")
-    for i in range(15):
-        ims = adb("shell", "dumpsys", "input_method")
-        shown = "mInputShown=true" in ims or "mIsInputViewShown=true" in ims
+    shown = False
+    for attempt in range(4):
+        for i in range(6):
+            ims = adb("shell", "dumpsys", "input_method")
+            shown = "mInputShown=true" in ims or "mIsInputViewShown=true" in ims
+            if shown:
+                break
+            time.sleep(1)
         if shown:
             break
+        phase(f"keyboard not shown after tap {attempt + 1}, foreground {d.app_current()}, tapping again")
+        if d.app_current().get("package") != CHROME:
+            adb("shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", url, CHROME)
+            time.sleep(3)
+        d.click(x, y)
         time.sleep(1)
     focus = [l.strip() for l in adb("shell", "dumpsys", "window").splitlines() if "mCurrentFocus" in l or "mInputMethodWindow" in l]
     phase(f"ime shown={shown}, windows: {focus}")
@@ -206,7 +216,8 @@ def run(page, prefix, out, tag, result):
         d.click(*keys["今日"])
         result["picked"] = "今日"
     else:
-        result["picked"] = None
+        tap_key(d, "Space")
+        result["picked"] = "space"
     time.sleep(1.5)
     d.screenshot(f"{out}/{tag}-after.png")
     result["state"] = cdp_eval("window.__state()")
