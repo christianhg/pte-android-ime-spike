@@ -139,6 +139,11 @@ def run(page, prefix, out, tag, result):
         except Exception as e:
             last = e
             phase(f"cdp not ready: {e!r}")
+            try:
+                ts = requests.get(f"http://localhost:{CDP_PORT}/json", timeout=5).json()
+                phase("targets: " + "; ".join(f"{t.get('type')} {t.get('url')} attached={t.get('attached')}" for t in ts))
+            except Exception as e2:
+                phase(f"targets unavailable: {e2!r}")
         time.sleep(1)
     else:
         raise RuntimeError(f"page never loaded over CDP: {last!r}")
@@ -151,15 +156,15 @@ def run(page, prefix, out, tag, result):
         time.sleep(3)
         phase(f"re-foregrounded: {d.app_current()}")
     # Chrome exposes the contenteditable as an EditText; tapping it focuses it and raises Gboard.
-    field = d(className="android.widget.EditText")
-    for i in range(10):
-        if field.exists:
-            break
-        phase(f"waiting for EditText {i}: {d.app_current()}")
-        time.sleep(2)
-    else:
-        raise RuntimeError("no EditText in Chrome")
-    field.click()
+    # Web content is not reliably in the UiAutomator tree, so locate the field through the page and tap it on screen.
+    rect = cdp_eval("(() => { const el = document.querySelector('[contenteditable]'); el.style.minHeight = '50vh'; const r = el.getBoundingClientRect(); return {x: r.left + r.width / 2, y: r.top + r.height / 2, dpr: devicePixelRatio, ih: innerHeight, sh: screen.height}; })()")
+    w, h = d.window_size()
+    # Chrome's content area starts below the status bar and toolbar; derive its offset from the screen/viewport difference.
+    offset = (rect["sh"] - rect["ih"]) * rect["dpr"]
+    x, y = int(rect["x"] * rect["dpr"]), int(rect["y"] * rect["dpr"] + offset)
+    phase(f"field rect {rect}, tapping {x},{y} on {w}x{h}")
+    d.click(x, y)
+    time.sleep(1)
     cdp_eval("(() => { const el = document.querySelector('[contenteditable]'); el.focus(); const r = document.createRange(); r.selectNodeContents(el); r.collapse(false); const s = getSelection(); s.removeAllRanges(); s.addRange(r); })()")
     phase(f"field focused: activeElement={cdp_eval('document.activeElement && document.activeElement.isContentEditable')}")
     if not d(packageName=GBOARD).wait(timeout=15):
