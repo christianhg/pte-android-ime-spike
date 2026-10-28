@@ -1,4 +1,4 @@
 node_modules/
 page/dist/
 out/
-__pycache__/
+.cache/
