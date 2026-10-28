@@ -18,8 +18,9 @@ jobs:
         # baseline = published @portabletext/editor 8.2.4, the others are packed tarballs in page/tarballs.
         variant: [baseline]
         lang: [en]
-        api: [34, 35, 36]
-        attempt: [1, 2, 3]
+        api: [34, 36]
+        setup: [plain, suggest]
+        attempt: [1, 2]
     steps:
       - uses: actions/checkout@v4
 
@@ -62,6 +63,7 @@ jobs:
         timeout-minutes: 16
         env:
           IME_LANG: ${{ matrix.lang }}
+          IME_SETUP: ${{ matrix.setup }}
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: ${{ matrix.api }}
@@ -87,6 +89,7 @@ jobs:
         timeout-minutes: 16
         env:
           IME_LANG: ${{ matrix.lang }}
+          IME_SETUP: ${{ matrix.setup }}
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: ${{ matrix.api }}
@@ -116,5 +119,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: out-${{ matrix.variant }}-${{ matrix.lang }}-api${{ matrix.api }}-${{ matrix.attempt }}
+          name: out-${{ matrix.variant }}-${{ matrix.lang }}-api${{ matrix.api }}-${{ matrix.setup }}-${{ matrix.attempt }}
           path: out/
