@@ -20,6 +20,19 @@ for i in $(seq 1 48); do
   sleep 5
 done
 log "settle done after $((i * 5))s quiet=$quiet"
+case "${SWAP:-none}" in gboard|both)
+  log "install gboard from api36"
+  ls apks/gboard | tee -a "$out/swap.txt"
+  timeout 180 adb install-multiple -r -d apks/gboard/*.apk 2>&1 | tee -a "$out/swap.txt"
+  timeout 60 adb shell ime enable com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME 2>&1 | tee -a "$out/swap.txt"
+  timeout 60 adb shell ime set com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME 2>&1 | tee -a "$out/swap.txt"
+  ;; esac
+case "${SWAP:-none}" in chrome|both)
+  log "install chrome from api36"
+  for f in apks/trichrome/*.apk; do [ -e "$f" ] && timeout 180 adb install -r -d "$f" 2>&1 | tee -a "$out/swap.txt"; done
+  ls apks/chrome | tee -a "$out/swap.txt"
+  timeout 180 adb install-multiple -r -d apks/chrome/*.apk 2>&1 | tee -a "$out/swap.txt"
+  ;; esac
 log "diagnose start"
 timeout 120 scripts/diagnose.sh "$out" || log "diagnose rc=$?"
 
