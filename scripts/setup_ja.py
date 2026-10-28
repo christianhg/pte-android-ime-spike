@@ -45,11 +45,18 @@ time.sleep(4)
 snap(d, "settings")
 tap_text(d, r"^Languages$", "languages")
 tap_text(d, r"^Add keyboard$", "add-keyboard")
+# The list holds hundreds of languages. Use its search instead of scrolling.
+d(description="Search for a language").click()
+time.sleep(1.5)
 search = d(className="android.widget.EditText")
-if search.exists:
-    search.set_text("Japanese")
-    time.sleep(2)
-    snap(d, "search")
+if not search.wait(timeout=8):
+    snap(d, "missing-search-field")
+    raise RuntimeError("no search field after tapping Search for a language")
+search.set_text("Japanese")
+time.sleep(2)
+subprocess.run(["adb", "shell", "input", "keyevent", "KEYCODE_BACK"], timeout=60)  # hide the keyboard over the results
+time.sleep(1)
+snap(d, "search")
 tap_text(d, r"^(Japanese|日本語)$", "japanese", scroll=True)
 qwerty = d(textMatches=r"(?i).*qwerty.*")
 if qwerty.exists:

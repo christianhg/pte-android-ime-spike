@@ -17,7 +17,7 @@ jobs:
       matrix:
         # baseline = published @portabletext/editor 8.2.4, the others are packed tarballs in page/tarballs.
         variant: [baseline, fix-3380]
-        lang: [en, ja]
+        lang: [ja]
         attempt: [1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@v4
