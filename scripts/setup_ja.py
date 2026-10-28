@@ -30,7 +30,7 @@ def tap_text(d, pattern, name, scroll=False):
             d(scrollable=True).scroll.forward(steps=30)
             if sel.exists:
                 break
-    if not sel.wait(timeout=8):
+    if not sel.wait(timeout=15):
         snap(d, f"missing-{name}")
         raise RuntimeError(f"no node matching {pattern!r} for {name}")
     sel.click()
@@ -48,11 +48,13 @@ tap_text(d, r"^Add keyboard$", "add-keyboard")
 # The list holds hundreds of languages. Use its search instead of scrolling.
 d(description="Search for a language").click()
 time.sleep(1.5)
-search = d(className="android.widget.EditText")
+# The field is an AutoCompleteTextView, not an EditText.
+search = d(resourceId=f"{GBOARD}:id/search_src_text")
 if not search.wait(timeout=8):
     snap(d, "missing-search-field")
     raise RuntimeError("no search field after tapping Search for a language")
-search.set_text("Japanese")
+search.click()
+subprocess.run(["adb", "shell", "input", "text", "Japanese"], timeout=60)
 time.sleep(2)
 subprocess.run(["adb", "shell", "input", "keyevent", "KEYCODE_BACK"], timeout=60)  # hide the keyboard over the results
 time.sleep(1)
