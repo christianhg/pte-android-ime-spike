@@ -67,10 +67,18 @@ if not row.wait(timeout=15):
 row.click()
 time.sleep(2)
 snap(d, "japanese")
-qwerty = d(textMatches=r"(?i).*qwerty.*")
-if qwerty.exists:
-    qwerty.click()
-    time.sleep(1)
+# Gboard preselects 12 keys (kana flick) and opens on it, so keep QWERTY (romaji) as the only layout.
+def layout_selected(desc):
+    row = d(description=desc)
+    return row.exists and row.info.get("selected", False)
+
+for desc, want in (("QWERTY", True), ("12 keys", False), ("Handwriting", False)):
+    if d(description=desc).exists and layout_selected(desc) != want:
+        d(description=desc).click()
+        time.sleep(1)
+if not layout_selected("QWERTY") or layout_selected("12 keys"):
+    snap(d, "layouts-wrong")
+    raise RuntimeError("could not leave QWERTY as the only Japanese layout")
 snap(d, "layouts")
 tap_text(d, r"^(Done|Add)$", "done")
 subtypes = subprocess.run(["adb", "shell", "dumpsys", "input_method"], capture_output=True, text=True, timeout=60).stdout

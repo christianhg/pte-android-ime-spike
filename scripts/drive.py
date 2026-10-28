@@ -128,6 +128,8 @@ def ensure_japanese(d, out, tag):
     for attempt in range(4):
         keys = gboard_keys(d)
         if is_japanese(keys):
+            if "k" not in keys and "K" not in keys:
+                raise RuntimeError(f"japanese layout is not romaji QWERTY, labels {sorted(keys)[:60]}")
             phase(f"japanese layout active after {attempt} switches")
             return
         with open(f"{out}/{tag}-lang-{attempt}.xml", "w") as f:
