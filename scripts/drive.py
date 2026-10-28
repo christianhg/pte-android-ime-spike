@@ -8,6 +8,7 @@ Usage: python drive.py <page> <prefix> <outdir>
 import faulthandler
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -113,6 +114,54 @@ def tap_key(d, label):
             time.sleep(0.4)
             return
     raise RuntimeError(f"no Gboard node labelled {label!r}; labels: {sorted(keys)[:80]}")
+
+
+JA_HINTS = ("あ", "かな", "変換", "空白", "確定", "ABC", "記号")
+
+
+def is_japanese(keys):
+    return any(h in k for k in keys for h in JA_HINTS)
+
+
+def ensure_japanese(d, out, tag):
+    """Gboard opens on English. Tap its language key until the Japanese layout shows."""
+    for attempt in range(4):
+        keys = gboard_keys(d)
+        if is_japanese(keys):
+            phase(f"japanese layout active after {attempt} switches")
+            return
+        with open(f"{out}/{tag}-lang-{attempt}.xml", "w") as f:
+            f.write(d.dump_hierarchy())
+        switch = [k for k in keys if re.search(r"(?i)language|globe|switch to", k) and "input method" not in k.lower()]
+        phase(f"not japanese yet, language keys {switch}, labels {sorted(keys)[:60]}")
+        if switch:
+            d.click(*keys[switch[0]])
+        else:
+            # The space bar cycles languages on a long swipe, and long-press opens the picker.
+            sp = keys.get("Space") or keys.get("space")
+            if not sp:
+                break
+            d.swipe(sp[0] - 150, sp[1], sp[0] + 150, sp[1], 0.3)
+        time.sleep(1.5)
+    raise RuntimeError("could not switch Gboard to Japanese")
+
+
+def type_word(d, out, tag, result, n):
+    for key in "kyou":
+        tap_key(d, key)
+    phase(f"typed kyou ({n})")
+    d.screenshot(f"{out}/{tag}-composing{n}.png")
+    result[f"composing{n}"] = cdp_eval("window.__state()")
+    keys = gboard_keys(d)
+    result[f"candidates{n}"] = [k for k in keys if len(k) <= 6 and not k.isascii()][:30]
+    if "今日" in keys:
+        d.click(*keys["今日"])
+        result[f"picked{n}"] = "今日"
+    else:
+        tap_key(d, "Space")
+        result[f"picked{n}"] = "space"
+    time.sleep(1.5)
+    d.screenshot(f"{out}/{tag}-after{n}.png")
 
 
 def main():
@@ -229,28 +278,21 @@ def run(page, prefix, out, tag, result):
     with open(f"{out}/{tag}-keyboard.xml", "w") as f:
         f.write(d.dump_hierarchy())
     d.screenshot(f"{out}/{tag}-keyboard.png")
+    if os.environ.get("IME_LANG") == "ja":
+        ensure_japanese(d, out, tag)
     labels = sorted(gboard_keys(d))
     result["gboard_labels"] = labels
     phase(f"keys found: {len(labels)} labels, sample {labels[:40]}")
 
     # Romaji on the Japanese QWERTY layout and plain English on the English layout use the same keys.
-    for key in "kyou":
-        tap_key(d, key)
-    phase("typed kyou")
-    d.screenshot(f"{out}/{tag}-composing.png")
-    result["composing"] = cdp_eval("window.__state()")
-
-    keys = gboard_keys(d)
-    result["candidates"] = [k for k in keys if len(k) <= 6 and not k.isascii()][:30]
-    if "今日" in keys:
-        d.click(*keys["今日"])
-        result["picked"] = "今日"
-    else:
-        tap_key(d, "Space")
-        result["picked"] = "space"
-    time.sleep(1.5)
-    d.screenshot(f"{out}/{tag}-after.png")
+    type_word(d, out, tag, result, "1")
+    result["after_first"] = cdp_eval("window.__state()")
+    first_len = len(result["after_first"]["events"])
+    type_word(d, out, tag, result, "2")
     result["state"] = cdp_eval("window.__state()")
+    second = result["state"]["events"][first_len:]
+    result["second_word_compositionstart"] = sum(e["type"] == "compositionstart" for e in second)
+    result["picked"] = result["picked1"] + "/" + result["picked2"]
 
     with open(f"{out}/{tag}.json", "w") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
@@ -267,7 +309,8 @@ def run(page, prefix, out, tag, result):
     with open(f"{out}/{tag}.json", "w") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
     print(f"RESULT {tag}: text={result['state']['text']!r} picked={result['picked']} "
-          f"compositionstart={sum(e['type'] == 'compositionstart' for e in events)} nested={nested}", flush=True)
+          f"compositionstart={sum(e['type'] == 'compositionstart' for e in events)} nested={nested} "
+          f"second_word_compositionstart={result['second_word_compositionstart']} lang={os.environ.get('IME_LANG', 'en')}", flush=True)
     return d
 
 

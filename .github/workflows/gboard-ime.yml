@@ -16,7 +16,8 @@ jobs:
       fail-fast: false
       matrix:
         # baseline = published @portabletext/editor 8.2.4, the others are packed tarballs in page/tarballs.
-        variant: [baseline, fix-3380, unified-input-manager]
+        variant: [baseline, fix-3380]
+        lang: [en, ja]
         attempt: [1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@v4
@@ -58,6 +59,8 @@ jobs:
         id: run1
         continue-on-error: true
         timeout-minutes: 16
+        env:
+          IME_LANG: ${{ matrix.lang }}
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
@@ -81,6 +84,8 @@ jobs:
       - name: Run on emulator (boot retry)
         if: steps.run1.outcome == 'failure' && steps.boot.outputs.booted == 'no'
         timeout-minutes: 16
+        env:
+          IME_LANG: ${{ matrix.lang }}
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
@@ -110,5 +115,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: out-${{ matrix.variant }}-${{ matrix.attempt }}
+          name: out-${{ matrix.variant }}-${{ matrix.lang }}-${{ matrix.attempt }}
           path: out/

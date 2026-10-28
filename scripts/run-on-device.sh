@@ -33,6 +33,12 @@ log "soft keyboard"
 a shell settings put secure show_ime_with_hard_keyboard 1
 a shell settings get secure show_ime_with_hard_keyboard
 
+if [ "${IME_LANG:-en}" = ja ]; then
+  log "japanese setup"
+  timeout -k 10 240 python3 -u scripts/setup_ja.py "$out" 2>&1 | tee -a "$out/ja-setup.log"
+  log "japanese setup rc=${PIPESTATUS[0]}"
+fi
+
 log "logcat"
 a logcat -c
 (timeout 900 adb logcat -v time > "$out/logcat.txt" 2>&1 &)
