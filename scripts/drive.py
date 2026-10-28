@@ -162,7 +162,14 @@ def type_word(d, out, tag, result, n):
     phase(f"typed kyou ({n})")
     d.screenshot(f"{out}/{tag}-composing{n}.png")
     result[f"composing{n}"] = cdp_eval("window.__state()")
+    # Gboard v15 sometimes shows only the kana candidate first and adds the kanji a moment later.
     keys = gboard_keys(d)
+    if os.environ.get("IME_LANG") == "ja":
+        for _ in range(6):
+            if "今日" in keys or "用" in keys:
+                break
+            time.sleep(0.5)
+            keys = gboard_keys(d)
     result[f"candidates{n}"] = [k for k in keys if len(k) <= 6 and not k.isascii()][:30]
     if "今日" in keys:
         d.click(*keys["今日"])
