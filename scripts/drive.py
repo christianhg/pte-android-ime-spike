@@ -50,6 +50,23 @@ def dismiss_chrome_screens(d):
 
 
 def cdp_eval(expression):
+    """Evaluate in the page. Chrome's DevTools socket sometimes drops a connection, so retry on a fresh one."""
+    last = None
+    for attempt in range(4):
+        try:
+            return _cdp_eval_once(expression)
+        except (requests.exceptions.ConnectionError, websocket.WebSocketException, ConnectionError, OSError) as e:
+            last = e
+            phase(f"cdp dropped ({attempt + 1}): {e!r}, retrying")
+            time.sleep(1.5)
+            try:
+                adb("forward", f"tcp:{CDP_PORT}", "localabstract:chrome_devtools_remote")
+            except Exception:
+                pass
+    raise last
+
+
+def _cdp_eval_once(expression):
     targets = requests.get(f"http://localhost:{CDP_PORT}/json", timeout=10).json()
     page = next(t for t in targets if t.get("type") == "page" and t.get("url", "").startswith(CURRENT_URL))
     ws = websocket.create_connection(page["webSocketDebuggerUrl"], timeout=10, suppress_origin=True)
@@ -82,11 +99,14 @@ def gboard_keys(d):
     The accessibility dump sometimes comes back without any Gboard nodes, so retry it a few times.
     """
     keys = {}
-    for attempt in range(4):
+    for attempt in range(8):
         keys = _gboard_keys_once(d)
-        if keys:
+        # A dump taken mid-redraw can hold only part of the keyboard. A whole layout has its space key.
+        if any(k in keys for k in ("Space", "space", "スペース")):
             return keys
-        phase(f"a11y dump had no Gboard nodes (attempt {attempt + 1}), retrying")
+        if keys and attempt >= 3:
+            return keys
+        phase(f"a11y dump incomplete, {len(keys)} Gboard nodes (attempt {attempt + 1}), retrying")
         time.sleep(1.5)
     return keys
 
