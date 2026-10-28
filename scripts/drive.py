@@ -125,7 +125,7 @@ def is_japanese(keys):
 
 def ensure_japanese(d, out, tag):
     """Gboard opens on English. Tap its language key until the Japanese layout shows."""
-    for attempt in range(4):
+    for attempt in range(6):
         keys = gboard_keys(d)
         if is_japanese(keys):
             if "k" not in keys and "K" not in keys:
@@ -134,7 +134,15 @@ def ensure_japanese(d, out, tag):
             return
         with open(f"{out}/{tag}-lang-{attempt}.xml", "w") as f:
             f.write(d.dump_hierarchy())
-        switch = [k for k in keys if re.search(r"(?i)language|globe|switch to", k) and "input method" not in k.lower()]
+        # Gboard v15 shows a "Japanese is now installed" banner over the keyboard. Its text mentions the
+        # globe key, so close it first and only ever tap the language key itself.
+        banner = [k for k in keys if k.lower().startswith("close the new language")]
+        if banner:
+            phase("closing the new language banner")
+            d.click(*keys[banner[0]])
+            time.sleep(1)
+            continue
+        switch = [k for k in keys if re.search(r"(?i)^(next language|switch to|globe)", k)]
         phase(f"not japanese yet, language keys {switch}, labels {sorted(keys)[:60]}")
         if switch:
             d.click(*keys[switch[0]])

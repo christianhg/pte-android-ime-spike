@@ -46,13 +46,22 @@ snap(d, "settings")
 tap_text(d, r"^Languages$", "languages")
 tap_text(d, r"^Add keyboard$", "add-keyboard")
 # The list holds hundreds of languages. Use its search instead of scrolling.
-d(description="Search for a language").click()
-time.sleep(1.5)
-# The field is an AutoCompleteTextView, not an EditText.
-search = d(resourceId=f"{GBOARD}:id/search_src_text")
-if not search.wait(timeout=8):
-    snap(d, "missing-search-field")
-    raise RuntimeError("no search field after tapping Search for a language")
+# The same Gboard build shows one of two screens: a search button that opens an AutoCompleteTextView
+# (search_src_text), or an inline EditText with the hint "Search language".
+inline = d(className="android.widget.EditText", text="Search language")
+button = d(description="Search for a language")
+if inline.exists:
+    search = inline
+else:
+    if not button.wait(timeout=8):
+        snap(d, "missing-search-button")
+        raise RuntimeError("no language search on the Add keyboard screen")
+    button.click()
+    time.sleep(1.5)
+    search = d(resourceId=f"{GBOARD}:id/search_src_text")
+    if not search.wait(timeout=8):
+        snap(d, "missing-search-field")
+        raise RuntimeError("no search field after tapping Search for a language")
 search.click()
 subprocess.run(["adb", "shell", "input", "text", "Japanese"], timeout=60)
 time.sleep(2)

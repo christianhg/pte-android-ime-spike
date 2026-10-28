@@ -18,8 +18,8 @@ jobs:
         # baseline = published @portabletext/editor 8.2.4, the others are packed tarballs in page/tarballs.
         variant: [baseline]
         lang: [ja]
-        api: [34, 36]
-        attempt: [1, 2, 3]
+        api: [36]
+        attempt: [1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v4
 
