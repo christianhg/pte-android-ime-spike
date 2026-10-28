@@ -11,12 +11,13 @@ on:
 jobs:
   emulator:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        # One attempt until the pipeline works, then back to [1, 2, 3, 4, 5].
-        attempt: [1]
+        # baseline = published @portabletext/editor 8.2.4, the others are packed tarballs in page/tarballs.
+        variant: [baseline, fix-3380, unified-input-manager]
+        attempt: [1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@v4
 
@@ -37,7 +38,12 @@ jobs:
 
       - name: Build test page
         working-directory: page
-        run: npm install --no-audit --no-fund && npm run build
+        run: |
+          if [ "${{ matrix.variant }}" != baseline ]; then
+            npm pkg set "dependencies.@portabletext/editor=file:tarballs/${{ matrix.variant }}.tgz"
+          fi
+          npm install --no-audit --no-fund --no-package-lock && npm run build
+          node -e "console.log('EDITOR_VERSION', require('./node_modules/@portabletext/editor/package.json').version)"
 
       - uses: actions/setup-python@v5
         with:
@@ -49,6 +55,8 @@ jobs:
         run: mkdir -p out && echo "EMULATOR_START at $(date +%s)" | tee out/timing.txt
 
       - name: Run on emulator
+        id: run1
+        continue-on-error: true
         timeout-minutes: 16
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -63,6 +71,33 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim ${{ inputs.locale }}
           script: scripts/run-on-device.sh
 
+      # The emulator sometimes never comes online. Retry once, but only when it never booted.
+      - name: Check boot
+        id: boot
+        if: steps.run1.outcome == 'failure'
+        run: |
+          if grep -q BOOTED out/timing.txt; then echo booted=yes >> $GITHUB_OUTPUT; else echo booted=no >> $GITHUB_OUTPUT; echo "BOOT_RETRY"; fi
+
+      - name: Run on emulator (boot retry)
+        if: steps.run1.outcome == 'failure' && steps.boot.outputs.booted == 'no'
+        timeout-minutes: 16
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis_playstore
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          ram-size: 4096M
+          cores: 4
+          heap-size: 512M
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim ${{ inputs.locale }}
+          script: scripts/run-on-device.sh
+
+      - name: Fail when the first run failed after booting
+        if: steps.run1.outcome == 'failure' && steps.boot.outputs.booted == 'yes'
+        run: exit 1
+
       - name: Boot time
         if: always()
         run: |
@@ -75,5 +110,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: out-${{ matrix.attempt }}
+          name: out-${{ matrix.variant }}-${{ matrix.attempt }}
           path: out/

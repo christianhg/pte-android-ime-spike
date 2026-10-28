@@ -62,7 +62,21 @@ def cdp_eval(expression):
 
 
 def gboard_keys(d):
-    """Map of content-desc/text -> bounds center for every node in Gboard's window."""
+    """Map of content-desc/text -> bounds center for every node in Gboard's window.
+
+    The accessibility dump sometimes comes back without any Gboard nodes, so retry it a few times.
+    """
+    keys = {}
+    for attempt in range(4):
+        keys = _gboard_keys_once(d)
+        if keys:
+            return keys
+        phase(f"a11y dump had no Gboard nodes (attempt {attempt + 1}), retrying")
+        time.sleep(1.5)
+    return keys
+
+
+def _gboard_keys_once(d):
     import xml.etree.ElementTree as ET
 
     keys = {}
@@ -224,8 +238,20 @@ def run(page, prefix, out, tag, result):
 
     with open(f"{out}/{tag}.json", "w") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
+    events = result['state']['events']
+    # The #3376 signal: a compositionstart that arrives while an earlier composition is still open.
+    nested, open_ = 0, False
+    for e in events:
+        if e['type'] == 'compositionstart':
+            nested += open_
+            open_ = True
+        elif e['type'] == 'compositionend':
+            open_ = False
+    result['nested_compositionstart'] = nested
+    with open(f"{out}/{tag}.json", "w") as f:
+        json.dump(result, f, ensure_ascii=False, indent=2)
     print(f"RESULT {tag}: text={result['state']['text']!r} picked={result['picked']} "
-          f"compositionstart={sum(e['type'] == 'compositionstart' for e in result['state']['events'])}", flush=True)
+          f"compositionstart={sum(e['type'] == 'compositionstart' for e in events)} nested={nested}", flush=True)
     return d
 
 
