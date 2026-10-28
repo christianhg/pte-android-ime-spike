@@ -1,3 +1,0 @@
-uiautomator2==3.*
-websocket-client==1.*
-requests==2.*
