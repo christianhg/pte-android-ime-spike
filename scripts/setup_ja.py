@@ -78,15 +78,24 @@ row.click()
 time.sleep(2)
 snap(d, "japanese")
 # Gboard preselects 12 keys (kana flick) and opens on it, so keep QWERTY (romaji) as the only layout.
-def layout_selected(desc):
-    row = d(description=desc)
+# Gboard v12 labels the tiles in English, v15 in Japanese (12 キー, 手書き).
+TWELVE = r"^12 (keys|キー)$"
+QWERTY = r"^QWERTY$"
+HANDWRITING = r"^(Handwriting|手書き)$"
+
+
+def layout_selected(pattern):
+    row = d(descriptionMatches=pattern)
     return row.exists and row.info.get("selected", False)
 
-for desc, want in (("QWERTY", True), ("12 keys", False), ("Handwriting", False)):
-    if d(description=desc).exists and layout_selected(desc) != want:
-        d(description=desc).click()
+for pattern, want in ((QWERTY, True), (TWELVE, False), (HANDWRITING, False)):
+    if d(descriptionMatches=pattern).exists and layout_selected(pattern) != want:
+        d(descriptionMatches=pattern).click()
         time.sleep(1)
-if not layout_selected("QWERTY") or layout_selected("12 keys"):
+if not d(descriptionMatches=TWELVE).exists:
+    snap(d, "layouts-unknown")
+    raise RuntimeError("no 12 keys tile, the layout labels changed")
+if not layout_selected(QWERTY) or layout_selected(TWELVE):
     snap(d, "layouts-wrong")
     raise RuntimeError("could not leave QWERTY as the only Japanese layout")
 snap(d, "layouts")
