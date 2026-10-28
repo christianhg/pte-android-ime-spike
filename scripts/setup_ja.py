@@ -56,11 +56,21 @@ if not search.wait(timeout=8):
 search.click()
 subprocess.run(["adb", "shell", "input", "text", "Japanese"], timeout=60)
 time.sleep(2)
-subprocess.run(["adb", "shell", "input", "keyevent", "KEYCODE_BACK"], timeout=60)  # hide the keyboard over the results
-time.sleep(1)
+snap(d, "search-typed")
+# Gboard v12 keeps the query when Back hides the keyboard. Gboard v15 closes the search on Back and
+# shows the full list again, so only press Back when the result row is hidden under the keyboard.
+if not d(resourceId="android:id/title", textMatches=r"^(Japanese|日本語)$").exists:
+    subprocess.run(["adb", "shell", "input", "keyevent", "KEYCODE_BACK"], timeout=60)
+    time.sleep(1)
 snap(d, "search")
 # The search field also reads "Japanese", so tap the result row (android:id/title) instead.
 row = d(resourceId="android:id/title", textMatches=r"^(Japanese|日本語)$")
+if not row.exists and d(scrollable=True).exists:
+    # Fall back to the alphabetical All languages list.
+    for _ in range(60):
+        if row.exists:
+            break
+        d(scrollable=True).scroll.forward(steps=20)
 if not row.wait(timeout=15):
     snap(d, "missing-japanese-row")
     raise RuntimeError("no Japanese row in the search results")
