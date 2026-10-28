@@ -47,11 +47,12 @@ jobs:
           npm install --no-audit --no-fund --no-package-lock && npm run build
           node -e "console.log('EDITOR_VERSION', require('./node_modules/@portabletext/editor/package.json').version)"
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - run: pip install -r scripts/requirements.txt
+      - name: Install the driver and fetch the uiautomator2 server jar
+        run: |
+          npm ci --no-audit --no-fund
+          npx tsc --noEmit
+          node --test scripts/test/*.test.ts
+          node scripts/fetch-u2-jar.ts
 
       - name: Record start
         run: mkdir -p out && echo "EMULATOR_START at $(date +%s)" | tee out/timing.txt

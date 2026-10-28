@@ -35,7 +35,7 @@ a shell settings get secure show_ime_with_hard_keyboard
 
 if [ "${IME_LANG:-en}" = ja ]; then
   log "japanese setup"
-  timeout -k 10 240 python3 -u scripts/setup_ja.py "$out" 2>&1 | tee -a "$out/ja-setup.log"
+  timeout -k 10 240 node scripts/setup-ja.ts "$out" 2>&1 | tee -a "$out/ja-setup.log"
   log "japanese setup rc=${PIPESTATUS[0]}"
 fi
 
@@ -44,7 +44,7 @@ a logcat -c
 (timeout 900 adb logcat -v time > "$out/logcat.txt" 2>&1 &)
 
 log "http server"
-(cd page/dist && exec python3 -u -m http.server 8765 < /dev/null > ../../out/http.log 2>&1) &
+node scripts/serve.ts page/dist 8765 < /dev/null > "$out/http.log" 2>&1 &
 server=$!
 trap 'kill $server 2>/dev/null' EXIT
 sleep 1
@@ -56,14 +56,14 @@ status=0
 for args in "plain.html ''" "editor.html ''" "editor.html x"; do
   eval "set -- $args"
   log "case $1 prefix='$2' start"
-  timeout -k 10 180 python3 -u scripts/drive.py "$1" "$2" "$out" 2>&1 | tee -a "$out/drive.log"
+  timeout -k 10 180 node scripts/drive.ts "$1" "$2" "$out" 2>&1 | tee -a "$out/drive.log"
   rc=${PIPESTATUS[0]}
   log "case $1 prefix='$2' rc=$rc"
   if [ "$rc" -ne 0 ]; then
     # Retry once from a fresh Chrome. The retry is logged, so the flake rate counts first attempts too.
     log "RETRY case $1 prefix='$2'"
     a shell am force-stop com.android.chrome
-    timeout -k 10 180 python3 -u scripts/drive.py "$1" "$2" "$out" 2>&1 | tee -a "$out/drive.log"
+    timeout -k 10 180 node scripts/drive.ts "$1" "$2" "$out" 2>&1 | tee -a "$out/drive.log"
     rc=${PIPESTATUS[0]}
     log "case $1 prefix='$2' retry rc=$rc"
   fi
