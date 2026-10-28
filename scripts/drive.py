@@ -357,6 +357,10 @@ def run(page, prefix, out, tag, result):
     result['nested_compositionstart'] = nested
     with open(f"{out}/{tag}.json", "w") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
+    # The driver only types the letters of "kyou". A digit means a tap landed as a long press on a key's
+    # number hint, which is a driver fault and not an editor result, so fail the case and let it retry.
+    if re.search(r"[0-9０-９]", result["state"]["text"] or ""):
+        raise RuntimeError(f"mistap: digit in typed text {result['state']['text']!r}")
     print(f"RESULT {tag}: text={result['state']['text']!r} picked={result['picked']} "
           f"compositionstart={sum(e['type'] == 'compositionstart' for e in events)} nested={nested} "
           f"second_word_compositionstart={result['second_word_compositionstart']} lang={os.environ.get('IME_LANG', 'en')}", flush=True)
