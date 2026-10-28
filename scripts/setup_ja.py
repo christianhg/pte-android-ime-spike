@@ -59,7 +59,14 @@ time.sleep(2)
 subprocess.run(["adb", "shell", "input", "keyevent", "KEYCODE_BACK"], timeout=60)  # hide the keyboard over the results
 time.sleep(1)
 snap(d, "search")
-tap_text(d, r"^(Japanese|日本語)$", "japanese", scroll=True)
+# The search field also reads "Japanese", so tap the result row (android:id/title) instead.
+row = d(resourceId="android:id/title", textMatches=r"^(Japanese|日本語)$")
+if not row.wait(timeout=15):
+    snap(d, "missing-japanese-row")
+    raise RuntimeError("no Japanese row in the search results")
+row.click()
+time.sleep(2)
+snap(d, "japanese")
 qwerty = d(textMatches=r"(?i).*qwerty.*")
 if qwerty.exists:
     qwerty.click()
