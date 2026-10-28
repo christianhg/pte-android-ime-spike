@@ -160,7 +160,8 @@ def type_word(d, out, tag, result, n):
         d.click(*keys["今日"])
         result[f"picked{n}"] = "今日"
     else:
-        tap_key(d, "Space")
+        keys = gboard_keys(d)
+        tap_key(d, "スペース" if "スペース" in keys else "Space")  # the Japanese layout labels it スペース
         result[f"picked{n}"] = "space"
     time.sleep(1.5)
     d.screenshot(f"{out}/{tag}-after{n}.png")
