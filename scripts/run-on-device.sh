@@ -10,6 +10,8 @@ a() { timeout 60 adb "$@"; local rc=$?; [ $rc -eq 124 ] && log "TIMEOUT adb $*";
 echo "BOOTED at $(date +%s)" | tee -a "$out/timing.txt"
 # Play services runs a startup storm after boot. Chrome depends on its font provider and gets killed
 # when it ANRs, so wait until the system has been free of ANRs for 30s (max 4 min).
+# Late ANRs (system, launcher) still pop a dialog that takes window focus. Suppress the dialogs.
+timeout 60 adb shell settings put global hide_error_dialogs 1 || log "TIMEOUT adb hide_error_dialogs"
 log "settle start"
 quiet=0
 for i in $(seq 1 48); do

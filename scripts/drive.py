@@ -61,6 +61,20 @@ def cdp_eval(expression):
             return msg["result"]["result"].get("value")
 
 
+def dismiss_anr(d):
+    """Tap Wait on any "isn't responding" dialog. It steals window focus, so the keyboard never shows."""
+    dismissed = 0
+    for _ in range(5):
+        if not d(textContains="isn't responding").exists:
+            break
+        title = d(textContains="isn't responding").get_text()
+        d(text="Wait").click()
+        dismissed += 1
+        phase(f"dismissed ANR dialog: {title}")
+        time.sleep(1)
+    return dismissed
+
+
 def gboard_keys(d):
     """Map of content-desc/text -> bounds center for every node in Gboard's window.
 
@@ -166,6 +180,7 @@ def run(page, prefix, out, tag, result):
         raise RuntimeError(f"page never loaded over CDP: {last!r}")
     phase(f"page loaded: {cdp_eval('location.href')}")
 
+    dismiss_anr(d)
     phase(f"before field lookup: {d.app_current()}")
     d.screenshot(f"{out}/{tag}-loaded.png")
     if d.app_current().get("package") != CHROME:
@@ -195,6 +210,7 @@ def run(page, prefix, out, tag, result):
         if shown:
             break
         phase(f"keyboard not shown after tap {attempt + 1}, foreground {d.app_current()}, tapping again")
+        dismiss_anr(d)
         if d.app_current().get("package") != CHROME:
             adb("shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", url, CHROME)
             time.sleep(3)
