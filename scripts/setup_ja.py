@@ -98,7 +98,10 @@ def layout_selected(pattern):
     return row.exists and row.info.get("selected", False)
 
 for pattern, want in ((QWERTY, True), (TWELVE, False), (HANDWRITING, False)):
-    if d(descriptionMatches=pattern).exists and layout_selected(pattern) != want:
+    # A tap sometimes does not take, so check the tile state and tap again.
+    for _ in range(3):
+        if not d(descriptionMatches=pattern).exists or layout_selected(pattern) == want:
+            break
         d(descriptionMatches=pattern).click()
         time.sleep(1)
 if not d(descriptionMatches=TWELVE).exists:

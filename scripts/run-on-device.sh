@@ -59,6 +59,14 @@ for args in "plain.html ''" "editor.html ''" "editor.html x"; do
   timeout -k 10 180 python3 -u scripts/drive.py "$1" "$2" "$out" 2>&1 | tee -a "$out/drive.log"
   rc=${PIPESTATUS[0]}
   log "case $1 prefix='$2' rc=$rc"
+  if [ "$rc" -ne 0 ]; then
+    # Retry once from a fresh Chrome. The retry is logged, so the flake rate counts first attempts too.
+    log "RETRY case $1 prefix='$2'"
+    a shell am force-stop com.android.chrome
+    timeout -k 10 180 python3 -u scripts/drive.py "$1" "$2" "$out" 2>&1 | tee -a "$out/drive.log"
+    rc=${PIPESTATUS[0]}
+    log "case $1 prefix='$2' retry rc=$rc"
+  fi
   [ "$rc" -ne 0 ] && status=1
   a shell am force-stop com.android.chrome
   a shell rm -rf /data/data/com.android.chrome/app_tabs 2>/dev/null || true

@@ -238,7 +238,18 @@ def run(page, prefix, out, tag, result):
 
     d = u2.connect()
     d.settings["wait_timeout"] = 10
-    phase(f"uiautomator2 up: {d.info.get('productName')} {d.window_size()}")
+    # Each case starts a fresh UiAutomator server, and its first call can land before it listens.
+    for attempt in range(6):
+        try:
+            info = d.info
+            break
+        except Exception as e:
+            phase(f"uiautomator2 not ready ({attempt + 1}): {e!r}")
+            time.sleep(2)
+            d = u2.connect()
+    else:
+        info = d.info
+    phase(f"uiautomator2 up: {info.get('productName')} {d.window_size()}")
 
     global CURRENT_URL
     url = f"http://localhost:{PORT}/{page}?prefix={prefix}"
