@@ -16,10 +16,19 @@ jobs:
       fail-fast: false
       matrix:
         # baseline = published @portabletext/editor 8.2.4, the others are packed tarballs in page/tarballs.
-        variant: [baseline]
-        lang: [ja, en]
-        api: [36]
-        attempt: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        # en on API 34 (Gboard 12.4 composes English): does the first word keep its capital?
+        # ja on API 36 (Gboard 15): does kana-kanji conversion survive an empty block and one made by Enter?
+        variant: [baseline, live-c1, feff-only]
+        lang: [en, ja]
+        attempt: [1, 2, 3, 4, 5]
+        exclude:
+          - lang: ja
+            variant: feff-only
+        include:
+          - lang: en
+            api: 34
+          - lang: ja
+            api: 36
     steps:
       - uses: actions/checkout@v4
 

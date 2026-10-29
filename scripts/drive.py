@@ -205,7 +205,9 @@ def type_word(d, out, tag, result, n):
 def main():
     page, prefix, out = sys.argv[1], sys.argv[2], sys.argv[3]
     os.makedirs(out, exist_ok=True)
-    tag = f"{page.split('.')[0]}-{'empty' if not prefix else 'prefix'}"
+    # prefix "x+enter" starts with "x" and taps Gboard's Enter first, to type into the block that creates.
+    kind = "empty" if not prefix else "enter" if prefix.endswith("+enter") else "prefix"
+    tag = f"{page.split('.')[0]}-{kind}"
     result = {"page": page, "prefix": prefix}
     # Print every thread's stack shortly before the shell's timeout kills us.
     faulthandler.dump_traceback_later(165, exit=False)
@@ -252,6 +254,8 @@ def run(page, prefix, out, tag, result):
     phase(f"uiautomator2 up: {info.get('productName')} {d.window_size()}")
 
     global CURRENT_URL
+    press_enter = prefix.endswith("+enter")
+    prefix = prefix.removesuffix("+enter")
     url = f"http://localhost:{PORT}/{page}?prefix={prefix}"
     CURRENT_URL = url
     adb("shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", url, CHROME)
@@ -333,6 +337,21 @@ def run(page, prefix, out, tag, result):
     result["gboard_labels"] = labels
     phase(f"keys found: {len(labels)} labels, sample {labels[:40]}")
 
+    if press_enter:
+        keys = gboard_keys(d)
+        enter = [k for k in keys if re.search(r"(?i)^(enter|return|改行|確定)$", k)]
+        if not enter:
+            raise RuntimeError(f"no Enter key, labels {sorted(keys)[:80]}")
+        d.click(*keys[enter[0]])
+        time.sleep(1.5)
+        result["after_enter"] = cdp_eval("window.__state()")
+        phase(f"pressed {enter[0]}: text={result['after_enter']['text']!r}")
+        if result["after_enter"]["text"] != prefix + "\n":
+            raise RuntimeError(f"Enter did not split the block: {result['after_enter']['text']!r}")
+        enter_events = len(result["after_enter"]["events"])
+    else:
+        enter_events = 0
+
     # Romaji on the Japanese QWERTY layout and plain English on the English layout use the same keys.
     type_word(d, out, tag, result, "1")
     result["after_first"] = cdp_eval("window.__state()")
@@ -345,7 +364,8 @@ def run(page, prefix, out, tag, result):
 
     with open(f"{out}/{tag}.json", "w") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
-    events = result['state']['events']
+    # Only events after Enter count, so the #3376 signal is about the new empty block.
+    events = result['state']['events'][enter_events:]
     # The #3376 signal: a compositionstart that arrives while an earlier composition is still open.
     nested, open_ = 0, False
     for e in events:
