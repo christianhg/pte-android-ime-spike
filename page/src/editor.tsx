@@ -47,6 +47,9 @@ function App() {
       <Probe />
       <PortableTextEditable
         style={{border: '1px solid #888', minHeight: '3em', fontSize: 20}}
+        renderPlaceholder={
+          (window as any).__placeholder ? () => 'Type something' : undefined
+        }
       />
     </EditorProvider>
   )
