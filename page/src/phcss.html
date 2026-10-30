@@ -1,0 +1,18 @@
+<!doctype html>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>phcss</title>
+<style>#ed{border:1px solid #888;min-height:3em;font-size:20px;position:relative} .ph{position:absolute;left:0;right:0;user-select:none;pointer-events:none;opacity:.5} #ed:has(> br:only-child)::before{content:"Type something";position:absolute;opacity:.5;pointer-events:none}</style>
+<div id="ed" contenteditable="true"><br></div>
+<pre id="log" style="font-size:10px"></pre>
+<script>
+  const ed = document.getElementById('ed')
+  const events = []
+  for (const t of [beforeinput, input, compositionstart, compositionupdate, compositionend]) {
+    ed.addEventListener(t, (e) => {
+      events.push({type: t, inputType: e.inputType, data: e.data})
+      document.getElementById('log').textContent = events.map((x) => JSON.stringify(x)).join('\n')
+    })
+  }
+  window.__state = () => ({text: ed.innerText, events})
+  ed.focus()
+</script>
