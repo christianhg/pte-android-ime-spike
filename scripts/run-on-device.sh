@@ -67,6 +67,13 @@ elif [ "${PROBE:-}" = candidates ]; then
   status=${PIPESTATUS[0]}
   log "candidates probe rc=$status"
   cases=()
+elif [ "${PROBE:-}" = readiness ]; then
+  # The readiness probe replaces the three cases: kyou every 5s on one plain page until Japanese Gboard offers kanji.
+  log "readiness probe start"
+  timeout -k 10 600 node scripts/probe-readiness.ts "$out" 2>&1 | tee -a "$out/drive.log"
+  status=${PIPESTATUS[0]}
+  log "readiness probe rc=$status"
+  cases=()
 else
   cases=("plain.html ''" "editor.html ''" "editor.html x")
 fi

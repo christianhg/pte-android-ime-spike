@@ -8,6 +8,7 @@ import {hasDigit, isJapanese, nestedCompositionstart, resultLine} from '../drive
 import {packageKeys, parseXml} from '../lib/hierarchy.ts'
 import {pyRepr, pySorted} from '../lib/util.ts'
 import {candidates, findLabel, gboardNodes, summary} from '../probe-candidates.ts'
+import {hasKanji, screenLabels, stripLabels, summary as readinessSummary} from '../probe-readiness.ts'
 
 const GBOARD = 'com.google.android.inputmethod.latin'
 const fixture = (name: string) => readFileSync(new URL(`fixtures/${name}`, import.meta.url), 'utf8')
@@ -109,4 +110,19 @@ test('the candidates summary names strip, expanded list and the committed code p
     "r1w2:strip=no,expanded=yes,committed='きょう今日'[U+304D+U+3087+U+3046+U+4ECA+U+65E5]",
   )
   assert.equal(summary({rep: 3, word: 1, strip: true, more: false, expanded: null, scrolled: false, committed: '', codepoints: []}), "r3w1:strip=yes,expanded=no_more_button,committed=''[]")
+})
+
+test('the readiness probe counts only strip labels kyou brought, and spots ideographs', () => {
+  const nodes = gboardNodes(fixture('ja-keyboard.xml'))
+  const idle = new Set(candidates(nodes).map((n) => n.label))
+  assert.deepEqual(stripLabels(nodes, idle), [])
+  assert.ok(stripLabels(nodes, new Set()).includes('設定'))
+  assert.ok(!stripLabels(nodes, new Set()).includes('Back'))
+  assert.ok(hasKanji('今日') && !hasKanji('きょう') && !hasKanji('キョウ'))
+  assert.ok(screenLabels(fixture('ja-keyboard.xml')).has(`${GBOARD}: 設定`))
+})
+
+test('the readiness summary gives the first kanji time and what followed', () => {
+  assert.equal(readinessSummary([{t: 1, kanji: false, labels: []}, {t: 61.2, kanji: true, labels: ['今日']}, {t: 66, kanji: true, labels: []}, {t: 71, kanji: false, labels: [], error: 'x'}]), 'READINESS_SUMMARY first_kanji_t=61.2 iterations=4 after=[true,error]')
+  assert.equal(readinessSummary([{t: 1, kanji: false, labels: []}]), 'READINESS_SUMMARY first_kanji_t=none iterations=1 after=[]')
 })

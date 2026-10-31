@@ -153,7 +153,7 @@ async function backToKeyboard(d: Device, tag: string): Promise<void> {
 }
 
 /** Empty the field with Gboard's delete key, so an open composition goes too, then check over CDP. */
-async function clear(d: Device, tag: string): Promise<void> {
+export async function clear(d: Device, tag: string): Promise<void> {
   await backToKeyboard(d, tag)
   let s = await state()
   if (!s.text) return
