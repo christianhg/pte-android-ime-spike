@@ -55,7 +55,10 @@ a reverse --list
 status=0
 # PAGE is the editor page under test: editor.html (@portabletext/editor) or slate.html (slate-react).
 page=${PAGE:-editor.html}
-for args in "plain.html ''" "$page ''" "$page x" "$page x+enter"; do
+# The after-Enter case needs Gboard's Enter key to split the block. It runs on Japanese only.
+cases=("plain.html ''" "$page ''" "$page x")
+[ "${IME_LANG:-en}" = ja ] && cases+=("$page x+enter")
+for args in "${cases[@]}"; do
   eval "set -- $args"
   log "case $1 prefix='$2' start"
   timeout -k 10 180 node scripts/drive.ts "$1" "$2" "$out" 2>&1 | tee -a "$out/drive.log"

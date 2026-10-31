@@ -15,9 +15,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # pte-8.2.4 is before the empty-block fix, pte-8.2.10 after it. slate-latest is the newest
-        # slate-react (same packages as Slate main), slate-0.126 the release before Slate's own fix (#6096).
-        variant: [slate-latest, slate-0.126, pte-8.2.4, pte-8.2.10]
+        # slate-latest is the newest slate-react (same packages as Slate main). slate-0.126.0 and
+        # slate-0.126.3 are the releases either side of Slate's empty-leaf fix (#6096).
+        # pte-8.2.10 is @portabletext/editor after its own empty-block fix.
+        variant: [slate-latest, slate-0.126.3, slate-0.126.0, pte-8.2.10]
         lang: [ja, en]
         attempt: [1, 2, 3, 4, 5]
         include:
@@ -49,7 +50,8 @@ jobs:
         run: |
           case "${{ matrix.variant }}" in
             pte-8.2.10) npm pkg set "dependencies.@portabletext/editor=8.2.10" ;;
-            slate-0.126) npm pkg set dependencies.slate=0.126.2 dependencies.slate-dom=0.126.0 dependencies.slate-react=0.126.0 ;;
+            slate-0.126.0) npm pkg set dependencies.slate=0.126.2 dependencies.slate-dom=0.126.0 dependencies.slate-react=0.126.0 ;;
+            slate-0.126.3) npm pkg set dependencies.slate=0.126.2 dependencies.slate-dom=0.126.0 dependencies.slate-react=0.126.3 ;;
           esac
           npm install --no-audit --no-fund --no-package-lock && npm run build
           for p in @portabletext/editor slate slate-dom slate-react; do node -e "console.log('VERSION', '$p', require('./node_modules/$p/package.json').version)"; done
