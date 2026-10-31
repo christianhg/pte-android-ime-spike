@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "esbuild src/editor.tsx --bundle --minify --format=esm --outfile=dist/editor.js --jsx=automatic --define:process.env.NODE_ENV='\"production\"' && cp src/*.html dist/"
+    "build": "esbuild src/editor.tsx --bundle --minify --format=esm --outfile=dist/editor.js --jsx=automatic --define:process.env.NODE_ENV='\"production\"' && cp src/*.html dist/ && cp static/* dist/"
   },
   "dependencies": {
     "@portabletext/editor": "8.2.4",

@@ -53,7 +53,7 @@ a reverse tcp:8765 tcp:8765
 a reverse --list
 
 status=0
-for args in "plain.html ''" "editor.html ''" "editor.html x"; do
+for args in "textarea.html ''" "textarea.html x" "composer.html ''" "composer.html x" "composer-noph.html ''" "composer-noph.html x"; do
   eval "set -- $args"
   log "case $1 prefix='$2' start"
   timeout -k 10 180 node scripts/drive.ts "$1" "$2" "$out" 2>&1 | tee -a "$out/drive.log"

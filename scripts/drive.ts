@@ -281,7 +281,7 @@ async function run(page: string, prefix: string, out: string, tag: string, resul
   }
   // Chrome exposes the contenteditable as an EditText; tapping it focuses it and raises Gboard.
   // Web content is not reliably in the UiAutomator tree, so locate the field through the page and tap it on screen.
-  const rect = (await cdpEval("(() => { const el = document.querySelector('[contenteditable]'); el.style.minHeight = '50vh'; const r = el.getBoundingClientRect(); return {x: r.left + r.width / 2, y: r.top + r.height / 2, dpr: devicePixelRatio, ih: innerHeight, sh: screen.height}; })()")) as {x: number; y: number; dpr: number; ih: number; sh: number}
+  const rect = (await cdpEval("(() => { const el = document.querySelector('textarea, [contenteditable]'); el.style.minHeight = '50vh'; const r = el.getBoundingClientRect(); return {x: r.left + r.width / 2, y: r.top + r.height / 2, dpr: devicePixelRatio, ih: innerHeight, sh: screen.height}; })()")) as {x: number; y: number; dpr: number; ih: number; sh: number}
   const [w, h] = await d.windowSize()
   // Chrome's content area starts below the status bar and toolbar; derive its offset from the screen/viewport difference.
   const offset = (rect.sh - rect.ih) * rect.dpr
@@ -290,8 +290,8 @@ async function run(page: string, prefix: string, out: string, tag: string, resul
   phase(`field rect ${pyRepr(rect)}, tapping ${x},${y} on ${w}x${h}`)
   await d.click(x, y)
   await sleep(1)
-  await cdpEval('(() => { const el = document.querySelector(\'[contenteditable]\'); el.focus(); const r = document.createRange(); r.selectNodeContents(el); r.collapse(false); const s = getSelection(); s.removeAllRanges(); s.addRange(r); })()')
-  phase(`field focused: activeElement=${pyRepr(await cdpEval('document.activeElement && document.activeElement.isContentEditable'))}`)
+  await cdpEval('(() => { const el = document.querySelector(\'textarea, [contenteditable]\'); el.focus(); if (el instanceof HTMLTextAreaElement) { el.setSelectionRange(el.value.length, el.value.length); return } const r = document.createRange(); r.selectNodeContents(el); r.collapse(false); const s = getSelection(); s.removeAllRanges(); s.addRange(r); })()')
+  phase(`field focused: activeElement=${pyRepr(await cdpEval('document.activeElement && (document.activeElement.isContentEditable || document.activeElement instanceof HTMLTextAreaElement)'))}`)
   let shown = false
   let ims = ''
   for (let attempt = 0; attempt < 4; attempt++) {

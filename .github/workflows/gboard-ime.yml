@@ -11,7 +11,7 @@ on:
 jobs:
   emulator:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 70
     strategy:
       fail-fast: false
       matrix:
@@ -19,7 +19,7 @@ jobs:
         variant: [baseline]
         lang: [ja, en]
         api: [36]
-        attempt: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        attempt: [1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@v4
 
@@ -60,7 +60,7 @@ jobs:
       - name: Run on emulator
         id: run1
         continue-on-error: true
-        timeout-minutes: 16
+        timeout-minutes: 28
         env:
           IME_LANG: ${{ matrix.lang }}
         uses: reactivecircus/android-emulator-runner@v2
@@ -85,7 +85,7 @@ jobs:
 
       - name: Run on emulator (boot retry)
         if: steps.run1.outcome == 'failure' && steps.boot.outputs.booted == 'no'
-        timeout-minutes: 16
+        timeout-minutes: 28
         env:
           IME_LANG: ${{ matrix.lang }}
         uses: reactivecircus/android-emulator-runner@v2
