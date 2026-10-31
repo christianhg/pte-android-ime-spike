@@ -2,6 +2,7 @@ name: gboard-ime
 
 on:
   push:
+    branches-ignore: [ios-keyboard-spike]
   workflow_dispatch:
     inputs:
       locale:

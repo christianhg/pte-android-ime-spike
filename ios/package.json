@@ -1,0 +1,9 @@
+{
+  "name": "ios-keyboard-spike",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "appium": "*",
+    "webdriverio": "*"
+  }
+}
