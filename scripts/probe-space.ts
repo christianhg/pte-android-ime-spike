@@ -31,9 +31,9 @@ import {gboardNodes, type Node} from './probe-candidates.ts'
 const GBOARD = 'com.google.android.inputmethod.latin'
 const CHROME = 'com.android.chrome'
 export const ARMS = [
-  ['hidden', 5],
   ['outside', 5],
   ['space', 10],
+  ['hidden', 5],
 ] as const
 type Arm = (typeof ARMS)[number][0]
 const OUTSIDE = 40
