@@ -98,6 +98,14 @@ elif [ "${PROBE:-}" = load ]; then
   status=${PIPESTATUS[0]}
   log "load probe rc=$status"
   cases=()
+elif [ "${PROBE:-}" = space ]; then
+  # The space probe replaces the three cases: kyou then a tap on English Gboard, recording every candidate
+  # signal that Gboard got the Space, plus taps outside the keyboard and with it hidden as negatives.
+  log "space probe start"
+  timeout -k 10 1200 node scripts/probe-space.ts "$out" 2>&1 | tee -a "$out/drive.log"
+  status=${PIPESTATUS[0]}
+  log "space probe rc=$status"
+  cases=()
 else
   cases=("plain.html ''" "editor.html ''" "editor.html x")
 fi

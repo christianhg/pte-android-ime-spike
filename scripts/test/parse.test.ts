@@ -9,6 +9,7 @@ import {packageKeys, parseXml} from '../lib/hierarchy.ts'
 import {pyRepr, pySorted} from '../lib/util.ts'
 import {candidates, findLabel, gboardNodes, summary} from '../probe-candidates.ts'
 import {hasKanji, screenLabels, stripLabels, summary as readinessSummary} from '../probe-readiness.ts'
+import {diffLines, keyboardTop, pageGotSpace, parseGetevent, parseLogLine, parseRecentQueue, relevant, shiftState, spaceKey, stripLabels as spaceStrip, touchDevices} from '../probe-space.ts'
 import {classify, conversions, isHiragana, isLoadLine, lineTime, loadSummary, nonHiragana, result, scanLog} from '../probe-load.ts'
 
 const GBOARD = 'com.google.android.inputmethod.latin'
@@ -223,4 +224,71 @@ test('the load summary line', () => {
     loadSummary({arm: 'control', cls: 'late', loadT: undefined, switchT: 125.6, reloads: [], firstKanjiT: undefined, nonHiragana: ['キョウ'], result: 'setup-fault-never-loaded'}),
     "LOAD_SUMMARY arm=control class=late load_t=none switch_t=125.6 reloaded=none first_kanji_t=none non_hiragana=['キョウ'] result=setup-fault-never-loaded",
   )
+})
+
+test('the space probe finds Space, the strip and shift in the English keyboard dump', () => {
+  const xml = fixture('en-keyboard.xml')
+  const nodes = gboardNodes(xml)
+  assert.deepEqual(spaceKey(nodes), [379, 2118, 807, 2274])
+  assert.equal(keyboardTop(nodes), 1517)
+  assert.deepEqual(spaceStrip(nodes), ['Open features menu', 'Sticker Keyboard', 'GIF Keyboard', 'Clipboard', 'Settings', 'Theme settings', 'Use voice typing'])
+  assert.deepEqual(shiftState(xml), {desc: 'Shift enabled', selected: false, checked: false})
+  assert.equal(shiftState(fixture('no-gboard.xml')), null)
+})
+
+test('the space probe scales getevent touches to pixels and pairs down with up', () => {
+  const caps = [
+    'add device 1: /dev/input/event2',
+    '  name:     "virtio_input_multi_touch_1"',
+    '  events:',
+    '    ABS (0003): ABS_MT_POSITION_X    : value 0, min 0, max 32767, fuzz 0, flat 0, resolution 0',
+    '                ABS_MT_POSITION_Y    : value 0, min 0, max 32767, fuzz 0, flat 0, resolution 0',
+    'add device 2: /dev/input/event1',
+    '  name:     "qwerty2"',
+  ].join('\n')
+  const devices = touchDevices(caps)
+  assert.deepEqual([...devices], [['/dev/input/event2', {maxX: 32767, maxY: 32767}]])
+  const raw = [
+    '[    1234.000001] /dev/input/event2: EV_ABS       ABS_MT_TRACKING_ID   00000001',
+    '[    1234.000002] /dev/input/event2: EV_ABS       ABS_MT_POSITION_X    00004000',
+    '[    1234.000003] /dev/input/event2: EV_ABS       ABS_MT_POSITION_Y    00007000',
+    '[    1234.000004] /dev/input/event2: EV_KEY       BTN_TOUCH            DOWN',
+    '[    1234.000005] /dev/input/event2: EV_SYN       SYN_REPORT           00000000',
+    '[    1234.080000] /dev/input/event2: EV_ABS       ABS_MT_TRACKING_ID   ffffffff',
+    '[    1234.080001] /dev/input/event2: EV_KEY       BTN_TOUCH            UP',
+    '[    1234.080002] /dev/input/event1: EV_KEY       KEY_A                DOWN',
+  ].join('\n')
+  assert.deepEqual(parseGetevent(raw, devices, [1080, 2400]), [{device: '/dev/input/event2', x: 540, y: 2100, up: true}])
+  assert.deepEqual(parseGetevent('', devices, [1080, 2400]), [])
+})
+
+test('the space probe reads motion events from the RecentQueue of dumpsys input', () => {
+  const dump = [
+    'Input Dispatcher State:',
+    '  RecentQueue: length=3',
+    '    MotionEvent(deviceId=-1, eventTime=99, source=TOUCHSCREEN, displayId=0, action=DOWN, actionButton=0x00000000, flags=0x00000000, metaState=0x00000000, buttonState=0x00000000, classification=NONE, edgeFlags=0x00000000, xPrecision=1.0, yPrecision=1.0, xCursorPosition=nan, yCursorPosition=nan, pointers=[0: (593.0, 2196.0)]), policyFlags=0x62000000, age=812ms',
+    '    MotionEvent(deviceId=-1, eventTime=100, source=TOUCHSCREEN, displayId=0, action=UP, pointers=[0: (593.0, 2196.0)]), policyFlags=0x62000000, age=790ms',
+    '    KeyEvent(deviceId=-1, action=DOWN, keyCode=KEYCODE_BACK(4)), age=5000ms',
+    '  PendingEvent: <none>',
+  ].join('\n')
+  const events = parseRecentQueue(dump)
+  assert.deepEqual(events.map((e) => [e.action, e.x, e.y, e.age, e.deviceId]), [['DOWN', 593, 2196, 812, '-1'], ['UP', 593, 2196, 790, '-1']])
+  assert.deepEqual(parseRecentQueue('no queue here'), [])
+})
+
+test('the space probe parses epoch logcat lines and keeps input method ones', () => {
+  const l = parseLogLine('1761951234.567  4321  4400 V RemoteInputConnectionImpl: commitText text=" "')!
+  assert.deepEqual([l.t, l.pid, l.level, l.tag], [1761951234.567, 4321, 'V', 'RemoteInputConnectionImpl'])
+  assert.equal(relevant(l, new Set()), true)
+  const other = parseLogLine('1761951234.600  1000  1001 I ActivityManager: Start proc')!
+  assert.equal(relevant(other, new Set()), false)
+  assert.equal(relevant(other, new Set([1000])), true)
+  assert.equal(parseLogLine('--------- beginning of main'), undefined)
+})
+
+test('the space probe judges the page and dumpsys input_method diffs', () => {
+  assert.equal(pageGotSpace([{type: 'beforeinput', inputType: 'insertText', data: ' '}], 'you', 'you '), true)
+  assert.equal(pageGotSpace([{type: 'beforeinput', inputType: 'insertReplacementText', data: 'you '}], 'kyou', 'you '), true)
+  assert.equal(pageGotSpace([], 'kyou', 'kyou'), false)
+  assert.deepEqual(diffLines('a\n  mInputShown=true\nb', 'a\n  mInputShown=false\nb'), {added: ['  mInputShown=false'], removed: ['  mInputShown=true']})
 })
