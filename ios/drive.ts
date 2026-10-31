@@ -1,11 +1,13 @@
 // Type on the iOS Simulator's software keyboard in Mobile Safari by tapping its keys natively, then
-// read what the page ended up with. Usage: node ios/drive.ts <page> <prefix> <en|ja> <out>
+// read what the page ended up with.
+// Usage: node ios/drive.ts <page> <prefix> <en|ja> <out> <case>
+// Cases: kyou (two words, space or 今日 candidate), autocorrect (teh + space), edit (ab, delete, return, c)
 import {mkdirSync, writeFileSync} from 'node:fs'
 import {remote} from 'webdriverio'
 
-const [page, prefix, lang, out] = process.argv.slice(2) as [string, string, 'en' | 'ja', string]
+const [page, prefix, lang, out, caseName] = process.argv.slice(2) as [string, string, 'en' | 'ja', string, string]
 mkdirSync(out, {recursive: true})
-const tag = `${lang}-${page.replace('.html', '')}-${prefix || 'empty'}`
+const tag = `${lang}-${caseName}-${page.replace('.html', '')}-${prefix || 'empty'}`
 const t0 = Date.now()
 const phase = (msg: string) => console.log(`PHASE +${((Date.now() - t0) / 1000).toFixed(1)}s ${tag} ${msg}`)
 
@@ -43,32 +45,47 @@ async function web() {
   }
   await browser.switchContext(webContext)
 }
+const shots: string[] = []
 async function snapshot(name: string) {
   await native()
   writeFileSync(`${out}/${tag}-${name}.xml`, await browser.getPageSource())
   await browser.saveScreenshot(`${out}/${tag}-${name}.png`)
+  shots.push(name)
 }
-async function keyboardKeys(): Promise<string[]> {
+async function keyNames(): Promise<string[]> {
   await native()
-  const keys = await browser.$$('-ios predicate string:type == "XCUIElementTypeKey"')
+  const keys = await browser.$$('-ios predicate string:type == "XCUIElementTypeKey" AND visible == 1')
   const names: string[] = []
   for (const key of keys) names.push(await key.getAttribute('name'))
   return names
 }
-async function tapKey(name: string) {
+/** Tap a keyboard key or keyboard button (shift, return and the globe are buttons, letters are keys). */
+async function tap(name: string) {
   await native()
-  const key = browser.$(`-ios predicate string:type == "XCUIElementTypeKey" AND name ==[c] "${name}"`)
-  await key.waitForExist({timeout: 5000})
-  await key.click()
-}
-async function tapAny(name: string) {
-  await native()
-  const el = browser.$(`-ios predicate string:(label == "${name}" OR name == "${name}") AND type != "XCUIElementTypeKey"`)
+  const el = browser.$(
+    `-ios predicate string:(type == "XCUIElementTypeKey" OR type == "XCUIElementTypeButton") AND name ==[c] "${name}"`,
+  )
   await el.waitForExist({timeout: 5000})
   await el.click()
 }
+/** Tap whatever element is labelled `label` outside the keys, e.g. a candidate or a suggestion. */
+async function tapLabel(label: string): Promise<boolean> {
+  await native()
+  const el = browser.$(`-ios predicate string:(label == "${label}" OR name == "${label}") AND type != "XCUIElementTypeKey"`)
+  if (!(await el.isExisting())) return false
+  await el.click()
+  return true
+}
+async function state() {
+  await web()
+  return (await browser.execute(() => (window as any).__state())) as {text: string; events: unknown[]}
+}
+async function typeLetters(word: string) {
+  for (const letter of word) await tap(letter)
+}
 
-const result: Record<string, unknown> = {tag, page, prefix, lang}
+const result: Record<string, unknown> = {tag, page, prefix, lang, caseName}
+const steps: Array<Record<string, unknown>> = []
 let failed = false
 try {
   await web()
@@ -87,42 +104,66 @@ try {
     await keyboard.waitForExist({timeout: 15_000})
   }
   phase('keyboard shown')
-  let keys = await keyboardKeys()
+  let keys = await keyNames()
   result.initialKeys = keys
   if (lang === 'ja') {
-    // Cycle keyboards until the Japanese one shows. Its space key is not named "space".
-    for (let i = 0; i < 4 && keys.some((k) => k.toLowerCase() === 'space'); i++) {
-      await tapKey('Next keyboard')
-      keys = await keyboardKeys()
+    // The globe ("Next keyboard") is a button in the bar under the keys. Cycle until the space key's
+    // label changes from the English one.
+    const spaceLabel = async () => {
+      await native()
+      return browser.$('-ios predicate string:type == "XCUIElementTypeKey" AND name == "space"').getAttribute('label')
     }
-    result.jaKeys = keys
+    const english = await spaceLabel()
+    for (let i = 0; i < 3 && (await spaceLabel()) === english; i++) await tap('Next keyboard')
+    result.spaceLabel = await spaceLabel()
+    result.jaKeys = await keyNames()
+    phase(`keyboard switched, space label ${JSON.stringify(result.spaceLabel)}`)
   }
   await snapshot('keyboard')
-  const words = ['kyou', 'kyou']
-  const suggestions: unknown[] = []
-  for (const [i, word] of words.entries()) {
-    for (const letter of word) await tapKey(letter)
-    phase(`typed ${word} #${i + 1}`)
-    await snapshot(`word${i + 1}`)
-    if (lang === 'ja') {
-      await tapAny('今日')
-      phase(`picked 今日 #${i + 1}`)
-    } else {
-      await tapKey('space')
+
+  if (caseName === 'kyou') {
+    for (const i of [1, 2]) {
+      await typeLetters('kyou')
+      await snapshot(`word${i}`)
+      if (lang === 'ja') {
+        const picked = await tapLabel('今日')
+        steps.push({word: i, candidate: '今日', picked})
+        if (!picked) {
+          // Fall back to the conversion key, then confirm with return.
+          await tap('space')
+          await snapshot(`word${i}-convert`)
+          await tap('Return')
+        }
+      } else {
+        await tap('space')
+      }
+      steps.push({after: `word ${i}`, text: (await state()).text})
     }
-    await web()
-    suggestions.push(await browser.execute(() => (window as any).__state()))
+  } else if (caseName === 'autocorrect') {
+    await typeLetters('teh')
+    await snapshot('typed')
+    await tap('space')
+    steps.push({after: 'teh space', text: (await state()).text})
+    await typeLetters('cat')
+    await tap('space')
+  } else if (caseName === 'edit') {
+    await typeLetters('ab')
+    await tap('delete')
+    steps.push({after: 'ab delete', text: (await state()).text})
+    await tap('Return')
+    steps.push({after: 'return', text: (await state()).text})
+    await typeLetters('c')
   }
-  await web()
-  const state = (await browser.execute(() => (window as any).__state())) as {text: string; events: unknown[]}
-  result.text = state.text
-  result.state = state
-  result.afterEachWord = suggestions
+  const final = await state()
+  result.text = final.text
+  result.events = final.events
+  result.steps = steps
   await snapshot('final')
-  phase(`RESULT ${JSON.stringify(state.text)}`)
+  phase(`RESULT ${JSON.stringify(final.text)}`)
 } catch (error) {
   failed = true
   result.error = String(error)
+  result.steps = steps
   phase(`ERROR ${String(error).split('\n')[0]}`)
   try {
     await snapshot('error')

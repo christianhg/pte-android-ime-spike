@@ -57,10 +57,13 @@ jobs:
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:4723/status > /dev/null && break; sleep 2; done
           echo "APPIUM up at $(date +%s)" | tee -a ../out/timing.txt
           status=0
-          for args in "plain.html ''" "editor.html ''" "editor.html x"; do
+          if [ "$LANG_CASE" = en ]; then cases="kyou autocorrect edit"; else cases="kyou"; fi
+          for c in $cases; do
+          for args in "plain.html ''" "plain-zw.html ''" "editor.html ''" "editor.html x"; do
             eval "set -- $args"
-            node drive.ts "$1" "$2" "$LANG_CASE" ../out 2>&1 | tee -a ../out/drive.log
+            node drive.ts "$1" "$2" "$LANG_CASE" ../out "$c" 2>&1 | tee -a ../out/drive.log
             [ "${PIPESTATUS[0]}" -ne 0 ] && status=1
+          done
           done
           echo "DONE at $(date +%s)" | tee -a ../out/timing.txt
           grep RESULT ../out/drive.log || true
@@ -71,3 +74,5 @@ jobs:
         with:
           name: out-${{ matrix.runner }}-${{ matrix.lang }}-${{ matrix.attempt }}
           path: out
+          include-hidden-files: true
+          overwrite: true
