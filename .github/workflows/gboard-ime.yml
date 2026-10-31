@@ -8,22 +8,23 @@ on:
         description: Extra emulator option, e.g. "-change-locale ja-JP" (needs su, which Play images lack). Empty for English.
         default: ''
       probe:
-        description: '"dash" runs only the Japanese dash probe (scripts/probe-dash.ts) once, "candidates" the Japanese その他の候補 probe (scripts/probe-candidates.ts), "readiness" the Japanese kanji readiness probe (scripts/probe-readiness.ts) on three emulators, instead of the typing matrix.'
+        description: '"dash" runs only the Japanese dash probe (scripts/probe-dash.ts) once, "candidates" the Japanese その他の候補 probe (scripts/probe-candidates.ts), "readiness" the Japanese kanji readiness probe (scripts/probe-readiness.ts) on three emulators, "load" the Japanese dictionary load probe (scripts/probe-load.ts) on 15 emulators (3 arms x 5), instead of the typing matrix.'
         default: ''
 
 jobs:
   emulator:
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ (inputs.probe == 'dash' || inputs.probe == 'candidates' || inputs.probe == 'readiness') && 70 || 40 }}
+    timeout-minutes: ${{ (inputs.probe == 'dash' || inputs.probe == 'candidates' || inputs.probe == 'readiness' || inputs.probe == 'load') && 70 || 40 }}
     strategy:
       fail-fast: false
       matrix:
         # baseline = published @portabletext/editor 8.2.4, the others are packed tarballs in page/tarballs.
         variant: [baseline]
-        lang: ${{ fromJSON((inputs.probe == 'dash' || inputs.probe == 'candidates' || inputs.probe == 'readiness') && '["ja"]' || '["ja", "en"]') }}
+        lang: ${{ fromJSON((inputs.probe == 'dash' || inputs.probe == 'candidates' || inputs.probe == 'readiness' || inputs.probe == 'load') && '["ja"]' || '["ja", "en"]') }}
         api: [36]
-        # The readiness probe runs on three fresh emulators, the other probes on one.
-        attempt: ${{ fromJSON(inputs.probe == 'readiness' && '[1, 2, 3]' || (inputs.probe == 'dash' || inputs.probe == 'candidates' || inputs.probe == 'readiness') && '[1]' || '[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]') }}
+        # The readiness probe runs on three fresh emulators, the load probe on five per arm, the other probes on one.
+        # The load probe's attempts carry its arm (<arm>-<n>), so the other jobs keep their names.
+        attempt: ${{ fromJSON(inputs.probe == 'readiness' && '[1, 2, 3]' || inputs.probe == 'load' && '["control-1", "control-2", "control-3", "control-4", "control-5", "load-then-switch-1", "load-then-switch-2", "load-then-switch-3", "load-then-switch-4", "load-then-switch-5", "switch-reswitch-1", "switch-reswitch-2", "switch-reswitch-3", "switch-reswitch-4", "switch-reswitch-5"]' || (inputs.probe == 'dash' || inputs.probe == 'candidates' || inputs.probe == 'readiness') && '[1]' || '[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]') }}
     steps:
       - uses: actions/checkout@v4
 
@@ -64,10 +65,11 @@ jobs:
       - name: Run on emulator
         id: run1
         continue-on-error: true
-        timeout-minutes: ${{ (inputs.probe == 'dash' || inputs.probe == 'candidates' || inputs.probe == 'readiness') && 32 || 16 }}
+        timeout-minutes: ${{ (inputs.probe == 'dash' || inputs.probe == 'candidates' || inputs.probe == 'readiness' || inputs.probe == 'load') && 32 || 16 }}
         env:
           IME_LANG: ${{ matrix.lang }}
           PROBE: ${{ inputs.probe }}
+          PROBE_ARM: ${{ inputs.probe == 'load' && matrix.attempt || '' }}
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: ${{ matrix.api }}
@@ -90,10 +92,11 @@ jobs:
 
       - name: Run on emulator (boot retry)
         if: steps.run1.outcome == 'failure' && steps.boot.outputs.booted == 'no'
-        timeout-minutes: ${{ (inputs.probe == 'dash' || inputs.probe == 'candidates' || inputs.probe == 'readiness') && 32 || 16 }}
+        timeout-minutes: ${{ (inputs.probe == 'dash' || inputs.probe == 'candidates' || inputs.probe == 'readiness' || inputs.probe == 'load') && 32 || 16 }}
         env:
           IME_LANG: ${{ matrix.lang }}
           PROBE: ${{ inputs.probe }}
+          PROBE_ARM: ${{ inputs.probe == 'load' && matrix.attempt || '' }}
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: ${{ matrix.api }}
@@ -117,7 +120,7 @@ jobs:
           s=$(grep EMULATOR_START out/timing.txt | awk '{print $3}')
           b=$(grep BOOTED out/timing.txt | awk '{print $3}')
           [ -n "$s" ] && [ -n "$b" ] && echo "BOOT_SECONDS $((b - s))"
-          grep -E 'RESULT|DASH|CAND|READY|READINESS' out/drive.log || true
+          grep -E 'RESULT|DASH|CAND|READY|READINESS|LOAD' out/drive.log || true
           cat out/phases.log || true
 
       - uses: actions/upload-artifact@v4

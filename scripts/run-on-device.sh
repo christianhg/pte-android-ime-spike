@@ -8,6 +8,21 @@ log() { echo "PHASE $(date +%H:%M:%S) $*" | tee -a "$out/phases.log"; }
 a() { timeout 60 adb "$@"; local rc=$?; [ $rc -eq 124 ] && log "TIMEOUT adb $*"; return $rc; }
 
 echo "BOOTED at $(date +%s)" | tee -a "$out/timing.txt"
+if [ "${PROBE:-}" = load ]; then
+  # The load probe reads Gboard's dictionary load from a capture that runs from boot, so a line that has
+  # left the ring buffer is still on disk. A restarted adb logcat re-dumps the buffer after a marker.
+  timeout 10 adb logcat -b main,system,crash -G 16M || log "logcat -G failed"
+  (
+    end=$(( $(date +%s) + 1800 ))
+    while [ "$(date +%s)" -lt "$end" ]; do
+      echo "CAPTURE_START $(date +%s)"
+      timeout $(( end - $(date +%s) )) adb logcat -v epoch -b main,system,crash
+      timeout 10 adb get-state > /dev/null 2>&1 || break
+      sleep 1
+    done
+  ) >> "$out/boot-logcat.txt" 2>&1 &
+  capture=$!
+fi
 # Play services runs a startup storm after boot. Chrome depends on its font provider and gets killed
 # when it ANRs, so wait until the system has been free of ANRs for 30s (max 4 min).
 # Late ANRs (system, launcher) still pop a dialog that takes window focus. Suppress the dialogs.
@@ -40,13 +55,15 @@ if [ "${IME_LANG:-en}" = ja ]; then
 fi
 
 log "logcat"
-a logcat -c
+# Clearing would cut the load probe's boot capture short.
+[ "${PROBE:-}" = load ] || a logcat -c
 (timeout 900 adb logcat -v time > "$out/logcat.txt" 2>&1 &)
 
 log "http server"
 node scripts/serve.ts page/dist 8765 < /dev/null > "$out/http.log" 2>&1 &
 server=$!
 trap 'kill $server 2>/dev/null' EXIT
+[ "${PROBE:-}" = load ] && trap 'kill $server $capture 2>/dev/null; pkill -f "adb logcat -v epoch -b main,system,crash"' EXIT
 sleep 1
 curl -sf -o /dev/null http://localhost:8765/plain.html && log "http ok" || log "http FAILED"
 a reverse tcp:8765 tcp:8765
@@ -73,6 +90,13 @@ elif [ "${PROBE:-}" = readiness ]; then
   timeout -k 10 600 node scripts/probe-readiness.ts "$out" 2>&1 | tee -a "$out/drive.log"
   status=${PIPESTATUS[0]}
   log "readiness probe rc=$status"
+  cases=()
+elif [ "${PROBE:-}" = load ]; then
+  # The load probe replaces the three cases: switch to Japanese per PROBE_ARM around the dictionary load, then kyou for 60s.
+  log "load probe start arm=${PROBE_ARM:-}"
+  timeout -k 10 900 node scripts/probe-load.ts "$out" 2>&1 | tee -a "$out/drive.log"
+  status=${PIPESTATUS[0]}
+  log "load probe rc=$status"
   cases=()
 else
   cases=("plain.html ''" "editor.html ''" "editor.html x")

@@ -92,7 +92,7 @@ export function isJapanese(keys: Iterable<string>): boolean {
 }
 
 /** Gboard opens on English. Tap its language key until the Japanese layout shows. */
-async function ensureJapanese(d: Device, out: string, tag: string): Promise<void> {
+export async function ensureJapanese(d: Device, out: string, tag: string): Promise<void> {
   for (let attempt = 0; attempt < 6; attempt++) {
     const keys = await gboardKeys(d)
     if (isJapanese(keys.keys())) {
