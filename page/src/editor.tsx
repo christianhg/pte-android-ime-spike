@@ -11,6 +11,7 @@ const schemaDefinition = defineSchema({styles: [{name: 'normal'}]})
 
 const params = new URLSearchParams(location.search)
 const prefix = params.get('prefix') ?? ''
+const placeholder = params.get('placeholder')
 
 const initialValue = [
   {
@@ -47,6 +48,7 @@ function App() {
       <Probe />
       <PortableTextEditable
         style={{border: '1px solid #888', minHeight: '3em', fontSize: 20}}
+        renderPlaceholder={placeholder ? () => placeholder : undefined}
       />
     </EditorProvider>
   )

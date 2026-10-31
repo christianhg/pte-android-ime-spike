@@ -7,7 +7,7 @@ import {remote} from 'webdriverio'
 
 const [page, prefix, lang, out, caseName] = process.argv.slice(2) as [string, string, 'en' | 'ja', string, string]
 mkdirSync(out, {recursive: true})
-const tag = `${lang}-${caseName}-${page.replace('.html', '')}-${prefix || 'empty'}`
+const tag = `${lang}-${caseName}-${page.replace('.html', '').replace(/[?=&]/g, '-')}-${prefix || 'empty'}`
 const t0 = Date.now()
 const phase = (msg: string) => console.log(`PHASE +${((Date.now() - t0) / 1000).toFixed(1)}s ${tag} ${msg}`)
 
@@ -101,7 +101,7 @@ const steps: Array<Record<string, unknown>> = []
 let failed = false
 try {
   await web()
-  await browser.url(`http://localhost:8765/${page}?prefix=${encodeURIComponent(prefix)}`)
+  await browser.url(`http://localhost:8765/${page}${page.includes("?") ? "&" : "?"}prefix=${encodeURIComponent(prefix)}`)
   await browser.$('[contenteditable]').waitForExist({timeout: 20_000})
   phase('page loaded')
   // nativeWebTap turns this click into a real tap, which raises the software keyboard.

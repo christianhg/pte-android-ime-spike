@@ -59,7 +59,7 @@ jobs:
           status=0
           if [ "$LANG_CASE" = en ]; then cases="kyou autocorrect edit"; else cases="kyou"; fi
           for c in $cases; do
-          for args in "plain.html ''" "plain-zw.html ''" "editor.html ''" "editor.html x"; do
+          for args in "plain.html ''" "plain-zw.html ''" "editor.html ''" "editor.html?placeholder=Write ''" "editor.html x"; do
             eval "set -- $args"
             node drive.ts "$1" "$2" "$LANG_CASE" ../out "$c" 2>&1 | tee -a ../out/drive.log
             [ "${PIPESTATUS[0]}" -ne 0 ] && status=1
