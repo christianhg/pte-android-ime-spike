@@ -71,7 +71,7 @@ async function tap(name: string) {
 /** Tap whatever element is labelled `label` outside the keys, e.g. a candidate or a suggestion. */
 async function tapLabel(label: string): Promise<boolean> {
   await native()
-  const el = browser.$(`-ios predicate string:(label == "${label}" OR name == "${label}") AND type != "XCUIElementTypeKey"`)
+  const el = browser.$(`-ios predicate string:type == "XCUIElementTypeCell" AND name == "${label}"`)
   if (!(await el.isExisting())) return false
   await el.click()
   return true
@@ -81,7 +81,19 @@ async function state() {
   return (await browser.execute(() => (window as any).__state())) as {text: string; events: unknown[]}
 }
 async function typeLetters(word: string) {
-  for (const letter of word) await tap(letter)
+  // Only English: a composing Japanese field may not report the text until conversion.
+  if (lang === "ja") {
+    for (const letter of word) await tap(letter)
+    return
+  }
+  const before = (await state()).text.length
+  await tap(word[0]!)
+  if ((await state()).text.length === before) {
+    result.droppedFirstTap = ((result.droppedFirstTap as number) ?? 0) + 1
+    phase(`DROPPED first tap of ${word}, tapping again`)
+    await tap(word[0]!)
+  }
+  for (const letter of word.slice(1)) await tap(letter)
 }
 
 const result: Record<string, unknown> = {tag, page, prefix, lang, caseName}
@@ -107,18 +119,18 @@ try {
   let keys = await keyNames()
   result.initialKeys = keys
   if (lang === 'ja') {
-    // The globe ("Next keyboard") is a button in the bar under the keys. Cycle until the space key's
-    // label changes from the English one.
-    const spaceLabel = async () => {
-      await native()
-      return browser.$('-ios predicate string:type == "XCUIElementTypeKey" AND name == "space"').getAttribute('label')
-    }
-    const english = await spaceLabel()
-    for (let i = 0; i < 3 && (await spaceLabel()) === english; i++) await tap('Next keyboard')
-    result.spaceLabel = await spaceLabel()
-    result.jaKeys = await keyNames()
-    phase(`keyboard switched, space label ${JSON.stringify(result.spaceLabel)}`)
+    // Japanese Romaji is the only installed keyboard. Its delete key is labelled 削除, which tells it
+    // apart from the English layout.
+    await native()
+    const deleteLabel = await browser
+      .$('-ios predicate string:type == "XCUIElementTypeKey" AND name == "delete"')
+      .getAttribute('label')
+    result.deleteLabel = deleteLabel
+    phase(`keyboard delete label ${JSON.stringify(deleteLabel)}`)
+    if (deleteLabel !== '削除') throw new Error(`not the Japanese keyboard, delete is ${deleteLabel}`)
   }
+  // The keyboard drops taps that land before it has settled.
+  await browser.pause(1500)
   await snapshot('keyboard')
 
   if (caseName === 'kyou') {
