@@ -15,11 +15,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # baseline = published @portabletext/editor 8.2.4, the others are packed tarballs in page/tarballs.
-        variant: [baseline]
+        # pte-8.2.4 is before the empty-block fix, pte-8.2.10 after it. slate-latest is the newest
+        # slate-react (same packages as Slate main), slate-0.126 the release before Slate's own fix (#6096).
+        variant: [slate-latest, slate-0.126, pte-8.2.4, pte-8.2.10]
         lang: [ja, en]
-        api: [36]
-        attempt: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        attempt: [1, 2, 3, 4, 5]
+        include:
+          # Japanese composes on API 36. English composes only on API 34's Gboard.
+          - lang: ja
+            api: 36
+          - lang: en
+            api: 34
     steps:
       - uses: actions/checkout@v4
 
@@ -41,11 +47,12 @@ jobs:
       - name: Build test page
         working-directory: page
         run: |
-          if [ "${{ matrix.variant }}" != baseline ]; then
-            npm pkg set "dependencies.@portabletext/editor=file:tarballs/${{ matrix.variant }}.tgz"
-          fi
+          case "${{ matrix.variant }}" in
+            pte-8.2.10) npm pkg set "dependencies.@portabletext/editor=8.2.10" ;;
+            slate-0.126) npm pkg set dependencies.slate=0.126.2 dependencies.slate-dom=0.126.0 dependencies.slate-react=0.126.0 ;;
+          esac
           npm install --no-audit --no-fund --no-package-lock && npm run build
-          node -e "console.log('EDITOR_VERSION', require('./node_modules/@portabletext/editor/package.json').version)"
+          for p in @portabletext/editor slate slate-dom slate-react; do node -e "console.log('VERSION', '$p', require('./node_modules/$p/package.json').version)"; done
 
       - name: Install the driver and fetch the uiautomator2 server jar
         run: |
@@ -63,6 +70,7 @@ jobs:
         timeout-minutes: 16
         env:
           IME_LANG: ${{ matrix.lang }}
+          PAGE: ${{ startsWith(matrix.variant, 'slate') && 'slate.html' || 'editor.html' }}
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: ${{ matrix.api }}
@@ -88,6 +96,7 @@ jobs:
         timeout-minutes: 16
         env:
           IME_LANG: ${{ matrix.lang }}
+          PAGE: ${{ startsWith(matrix.variant, 'slate') && 'slate.html' || 'editor.html' }}
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: ${{ matrix.api }}

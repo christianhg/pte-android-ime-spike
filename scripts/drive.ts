@@ -2,7 +2,8 @@
 //
 // Usage: node scripts/drive.ts <page> <prefix> <outdir>
 //   page:   plain.html | editor.html
-//   prefix: existing text in the block ('' for the empty-block case)
+//   prefix: existing text in the block ('' for the empty-block case). A prefix ending in `+enter`
+//           starts with the rest and taps Gboard's Enter first, to type into the block that creates.
 
 import {mkdirSync, writeFileSync} from 'node:fs'
 import {adb, adbOutput} from './lib/adb.ts'
@@ -189,7 +190,8 @@ function writeJson(path: string, value: unknown): void {
 async function main(): Promise<void> {
   const [page, prefix, out] = process.argv.slice(2) as [string, string, string]
   mkdirSync(out, {recursive: true})
-  const tag = `${page.split('.')[0]}-${prefix ? 'prefix' : 'empty'}`
+  const kind = !prefix ? 'empty' : prefix.endsWith('+enter') ? 'enter' : 'prefix'
+  const tag = `${page.split('.')[0]}-${kind}`
   const result: Result = {page, prefix}
   // Say what the driver is blocked on shortly before the shell's timeout kills it.
   watchdog(165)
@@ -218,7 +220,9 @@ async function main(): Promise<void> {
   }
 }
 
-async function run(page: string, prefix: string, out: string, tag: string, result: Result): Promise<void> {
+async function run(page: string, rawPrefix: string, out: string, tag: string, result: Result): Promise<void> {
+  const pressEnter = rawPrefix.endsWith('+enter')
+  const prefix = pressEnter ? rawPrefix.slice(0, -'+enter'.length) : rawPrefix
   await adb(['reverse', `tcp:${PORT}`, `tcp:${PORT}`])
   await adb(['forward', `tcp:${CDP_PORT}`, 'localabstract:chrome_devtools_remote'])
   phase('adb reverse/forward set')
@@ -328,6 +332,20 @@ async function run(page: string, prefix: string, out: string, tag: string, resul
   result.gboard_labels = labels
   phase(`keys found: ${labels.length} labels, sample ${pyRepr(labels.slice(0, 40))}`)
 
+  let enterEvents = 0
+  if (pressEnter) {
+    const keys = await gboardKeys(d)
+    const enter = [...keys.keys()].filter((k) => /^(enter|return|改行|確定)$/i.test(k))
+    if (!enter.length) throw new Error(`no Enter key, labels ${pyRepr(pySorted(keys.keys()).slice(0, 80))}`)
+    await d.click(...keys.get(enter[0]!)!)
+    await sleep(1.5)
+    const afterEnter = (await cdpEval('window.__state()')) as PageState
+    result.after_enter = afterEnter
+    phase(`pressed ${enter[0]}: text=${pyRepr(afterEnter.text)}`)
+    if (afterEnter.text !== prefix + '\n') throw new Error(`Enter did not split the block: ${pyRepr(afterEnter.text)}`)
+    enterEvents = afterEnter.events.length
+  }
+
   // Romaji on the Japanese QWERTY layout and plain English on the English layout use the same keys.
   await typeWord(d, out, tag, result, '1')
   result.after_first = await cdpEval('window.__state()')
@@ -340,7 +358,8 @@ async function run(page: string, prefix: string, out: string, tag: string, resul
   result.picked = `${pyStr(result.picked1)}/${pyStr(result.picked2)}`
 
   writeJson(`${out}/${tag}.json`, result)
-  const events = state.events
+  // Only events after Enter count, so the #3376 signal is about the new empty block.
+  const events = state.events.slice(enterEvents)
   // The #3376 signal: a compositionstart that arrives while an earlier composition is still open.
   const nested = nestedCompositionstart(events)
   result.nested_compositionstart = nested
