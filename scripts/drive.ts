@@ -58,7 +58,7 @@ async function dismissAnr(d: Device): Promise<number> {
  *
  * The accessibility dump sometimes comes back without any Gboard nodes, so retry it a few times.
  */
-async function gboardKeys(d: Device): Promise<Keys> {
+export async function gboardKeys(d: Device): Promise<Keys> {
   let keys: Keys = new Map()
   for (let attempt = 0; attempt < 8; attempt++) {
     keys = packageKeys(await d.dumpHierarchy(), GBOARD)
@@ -218,7 +218,8 @@ async function main(): Promise<void> {
   }
 }
 
-async function run(page: string, prefix: string, out: string, tag: string, result: Result): Promise<void> {
+/** Open `page` in Chrome, focus its field and wait for Gboard, on the Japanese layout when IME_LANG=ja. */
+export async function openKeyboard(page: string, prefix: string, out: string, tag: string): Promise<Device> {
   await adb(['reverse', `tcp:${PORT}`, `tcp:${PORT}`])
   await adb(['forward', `tcp:${CDP_PORT}`, 'localabstract:chrome_devtools_remote'])
   phase('adb reverse/forward set')
@@ -324,6 +325,11 @@ async function run(page: string, prefix: string, out: string, tag: string, resul
   writeFileSync(`${out}/${tag}-keyboard.xml`, await d.dumpHierarchy())
   await d.screenshot(`${out}/${tag}-keyboard`)
   if (process.env.IME_LANG === 'ja') await ensureJapanese(d, out, tag)
+  return d
+}
+
+async function run(page: string, prefix: string, out: string, tag: string, result: Result): Promise<void> {
+  const d = await openKeyboard(page, prefix, out, tag)
   const labels = pySorted((await gboardKeys(d)).keys())
   result.gboard_labels = labels
   phase(`keys found: ${labels.length} labels, sample ${pyRepr(labels.slice(0, 40))}`)
