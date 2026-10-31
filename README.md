@@ -21,6 +21,10 @@ The run matrix compares editor builds:
 
 With `IME_LANG=ja`, `scripts/setup-ja.ts` first adds the Japanese QWERTY (romaji) layout through Gboard's settings screens, since the Play image has no root to change the locale.
 
+## Language and keyboard action probe
+
+A manual run (workflow_dispatch) also starts a `probe` job per language in the `langs` input (default `ko zh hi ar he th vi de en`), twice each. `scripts/setup-lang.ts` adds the language's Gboard layout and turns on gesture cursor control, then `scripts/probe.ts` runs each keyboard action on a fresh empty editor, in English and in that language: typing a word, Backspace while composing and after commit, Enter mid-word, holding Backspace, the space bar drag, tap-to-place, long-press to select, and an emoji with Backspace over it. Each action prints a `PROBE ... status=ok|failed|unsupported` line in `probe.log`, and `probe-<lang>.json` holds the text, selection and event log after every step. The artifacts are named `probe-<lang>-<attempt>`.
+
 ## Reading the result
 
 Each case prints a line like this in `drive.log`:
@@ -40,7 +44,7 @@ Every job uploads an `out-<variant>-<lang>-api<api>-<attempt>` artifact with the
 1. `.github/workflows/gboard-ime.yml` holds the matrix, the page build and the emulator boot, with one retry when the emulator never comes online.
 2. `scripts/run-on-device.sh` runs inside the booted emulator. It waits out the post-boot ANR storm, turns off system error dialogs, sets up Chrome and runs the three cases.
 3. `scripts/drive.ts` drives one case through the uiautomator2 server and CDP.
-4. `scripts/setup-ja.ts` adds the Japanese keyboard.
+4. `scripts/setup-ja.ts` adds the Japanese keyboard, `scripts/setup-lang.ts` the probe's languages, and `scripts/probe.ts` runs the keyboard action probe.
 5. `scripts/serve.ts` serves the built pages to the emulator.
 6. `scripts/lib/` holds the adb, uiautomator2, CDP and accessibility dump helpers.
 7. `scripts/diagnose.sh` records device facts and never fails the job.

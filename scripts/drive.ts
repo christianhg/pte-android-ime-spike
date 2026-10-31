@@ -23,7 +23,7 @@ type Result = Record<string, unknown>
 // Chrome's first-run and promo screens, in case the command-line flags are ignored on this build.
 const FRE_BUTTONS = ['Use without an account', 'Accept & continue', 'No thanks', 'No, thanks', 'Got it', 'Continue', 'Skip']
 
-async function dismissChromeScreens(d: Device): Promise<void> {
+export async function dismissChromeScreens(d: Device): Promise<void> {
   for (let i = 0; i < 6; i++) {
     let hit: string | undefined
     for (const b of FRE_BUTTONS) {
@@ -40,7 +40,7 @@ async function dismissChromeScreens(d: Device): Promise<void> {
 }
 
 /** Tap Wait on any "isn't responding" dialog. It steals window focus, so the keyboard never shows. */
-async function dismissAnr(d: Device): Promise<number> {
+export async function dismissAnr(d: Device): Promise<number> {
   let dismissed = 0
   for (let i = 0; i < 5; i++) {
     if (!(await d.find({textContains: "isn't responding"}).exists())) break

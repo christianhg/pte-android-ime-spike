@@ -325,6 +325,16 @@ export class Device {
     await this.rpc('click', [x, y])
   }
 
+  /** Press and hold for `duration` seconds, as uiautomator2's long_click sends it. */
+  async longClick(x: number, y: number, duration: number): Promise<void> {
+    await this.rpc('click', [Math.round(x), Math.round(y), Math.trunc(duration * 1000)])
+  }
+
+  /** One raw touch event, as uiautomator2's touch.down/move/up send it. */
+  async touch(action: 'down' | 'move' | 'up', x: number, y: number): Promise<void> {
+    await this.rpc('injectInputEvent', [{down: 0, up: 1, move: 2}[action], Math.round(x), Math.round(y), 0])
+  }
+
   /** Swipe over `duration` seconds. uiautomator moves one step about every 5ms. */
   async swipe(fx: number, fy: number, tx: number, ty: number, duration: number): Promise<void> {
     await this.rpc('swipe', [fx, fy, tx, ty, Math.max(2, Math.trunc(duration * 200))])

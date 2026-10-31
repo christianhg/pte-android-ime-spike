@@ -7,6 +7,9 @@ on:
       locale:
         description: Extra emulator option, e.g. "-change-locale ja-JP" (needs su, which Play images lack). Empty for English.
         default: ''
+      langs:
+        description: Languages for the keyboard action probe, space-separated. Each runs as its own job, twice.
+        default: 'ko zh hi ar he th vi de en'
 
 jobs:
   emulator:
@@ -118,4 +121,83 @@ jobs:
         if: always()
         with:
           name: out-${{ matrix.variant }}-${{ matrix.lang }}-api${{ matrix.api }}-${{ matrix.attempt }}
+          path: out/
+
+  # The keyboard action probe, on dispatch only. It runs beside the jobs above and leaves them as they are.
+  probe-langs:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      langs: ${{ steps.split.outputs.langs }}
+    steps:
+      - id: split
+        env:
+          LANGS: ${{ inputs.langs }}
+        run: echo "langs=$(printf '%s\n' $LANGS | jq -Rnc '[inputs | select(length > 0)]')" | tee -a "$GITHUB_OUTPUT"
+
+  probe:
+    needs: probe-langs
+    if: needs.probe-langs.outputs.langs != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    strategy:
+      fail-fast: false
+      matrix:
+        lang: ${{ fromJSON(needs.probe-langs.outputs.langs) }}
+        attempt: [1, 2]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable KVM group perms
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Build test page
+        working-directory: page
+        run: npm install --no-audit --no-fund --no-package-lock && npm run build
+
+      - name: Install the driver and fetch the uiautomator2 server jar
+        run: |
+          npm ci --no-audit --no-fund
+          npx tsc --noEmit
+          node --test scripts/test/*.test.ts
+          node scripts/fetch-u2-jar.ts
+
+      - name: Record start
+        run: mkdir -p out && echo "EMULATOR_START at $(date +%s)" | tee out/timing.txt
+
+      - name: Probe on emulator
+        timeout-minutes: 50
+        env:
+          PROBE_LANG: ${{ matrix.lang }}
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          target: google_apis_playstore
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          ram-size: 4096M
+          cores: 4
+          heap-size: 512M
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          script: scripts/run-on-device.sh
+
+      - name: Summary
+        if: always()
+        run: |
+          grep -hE '^SETUP .* (CURSOR_CONTROL|subtypes|enabled|download|tiles|layout|done)' out/setup.log || true
+          grep -hE '^PROBE' out/probe.log || true
+          cat out/phases.log || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: probe-${{ matrix.lang }}-${{ matrix.attempt }}
           path: out/

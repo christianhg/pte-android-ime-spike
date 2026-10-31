@@ -52,6 +52,21 @@ curl -sf -o /dev/null http://localhost:8765/plain.html && log "http ok" || log "
 a reverse tcp:8765 tcp:8765
 a reverse --list
 
+# Probe mode: add one Gboard language, then run the keyboard action probe instead of the typing cases.
+if [ -n "${PROBE_LANG:-}" ]; then
+  log "probe setup $PROBE_LANG"
+  timeout -k 10 360 node scripts/setup-lang.ts "$PROBE_LANG" "$out" 2>&1 | tee -a "$out/setup.log"
+  log "probe setup rc=${PIPESTATUS[0]}"
+  log "probe $PROBE_LANG"
+  timeout -k 10 1500 node scripts/probe.ts "$PROBE_LANG" "$out" 2>&1 | tee -a "$out/probe.log"
+  rc=${PIPESTATUS[0]}
+  log "probe rc=$rc"
+  a logcat -d -b crash > "$out/logcat-crash.txt"
+  a exec-out screencap -p > "$out/final.png"
+  echo "DONE at $(date +%s)" | tee -a "$out/timing.txt"
+  exit $rc
+fi
+
 status=0
 for args in "plain.html ''" "editor.html ''" "editor.html x"; do
   eval "set -- $args"
