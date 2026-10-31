@@ -60,6 +60,13 @@ if [ "${PROBE:-}" = dash ]; then
   status=${PIPESTATUS[0]}
   log "dash probe rc=$status"
   cases=()
+elif [ "${PROBE:-}" = candidates ]; then
+  # The candidates probe replaces the three cases: three fresh plain pages, その他の候補 after kyou on Japanese Gboard.
+  log "candidates probe start"
+  timeout -k 10 1200 node scripts/probe-candidates.ts "$out" 2>&1 | tee -a "$out/drive.log"
+  status=${PIPESTATUS[0]}
+  log "candidates probe rc=$status"
+  cases=()
 else
   cases=("plain.html ''" "editor.html ''" "editor.html x")
 fi

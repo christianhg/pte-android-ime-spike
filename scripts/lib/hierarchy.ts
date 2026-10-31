@@ -1,7 +1,8 @@
 // Parse uiautomator XML hierarchy dumps. A strict little parser for the dump's shape: nested elements
 // with quoted attributes and the five XML entities. Malformed input throws, as ElementTree did.
 
-export type XmlNode = {tag: string; attrs: Record<string, string>}
+// depth is 0 for the document element, so a node's parent is the nearest earlier node one level up.
+export type XmlNode = {tag: string; attrs: Record<string, string>; depth: number}
 
 const ENTITIES: Record<string, string> = {amp: '&', lt: '<', gt: '>', quot: '"', apos: "'"}
 
@@ -35,7 +36,7 @@ export function parseXml(xml: string): XmlNode[] {
     rootSeen = true
     const attrs: Record<string, string> = {}
     for (const a of m[4]!.matchAll(/([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) attrs[a[1]!] = unescape(a[2] ?? a[3] ?? '')
-    nodes.push({tag: m[3]!, attrs})
+    nodes.push({tag: m[3]!, attrs, depth: stack.length})
     if (!m[5]) stack.push(m[3]!)
   }
   if (xml.slice(at).includes('<')) throw new Error(`malformed XML near offset ${at}`)

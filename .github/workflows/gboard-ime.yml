@@ -8,21 +8,21 @@ on:
         description: Extra emulator option, e.g. "-change-locale ja-JP" (needs su, which Play images lack). Empty for English.
         default: ''
       probe:
-        description: '"dash" runs only the Japanese dash probe (scripts/probe-dash.ts) once, instead of the typing matrix.'
+        description: '"dash" runs only the Japanese dash probe (scripts/probe-dash.ts) once, "candidates" the Japanese その他の候補 probe (scripts/probe-candidates.ts), instead of the typing matrix.'
         default: ''
 
 jobs:
   emulator:
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ inputs.probe == 'dash' && 70 || 40 }}
+    timeout-minutes: ${{ (inputs.probe == 'dash' || inputs.probe == 'candidates') && 70 || 40 }}
     strategy:
       fail-fast: false
       matrix:
         # baseline = published @portabletext/editor 8.2.4, the others are packed tarballs in page/tarballs.
         variant: [baseline]
-        lang: ${{ fromJSON(inputs.probe == 'dash' && '["ja"]' || '["ja", "en"]') }}
+        lang: ${{ fromJSON((inputs.probe == 'dash' || inputs.probe == 'candidates') && '["ja"]' || '["ja", "en"]') }}
         api: [36]
-        attempt: ${{ fromJSON(inputs.probe == 'dash' && '[1]' || '[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]') }}
+        attempt: ${{ fromJSON((inputs.probe == 'dash' || inputs.probe == 'candidates') && '[1]' || '[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]') }}
     steps:
       - uses: actions/checkout@v4
 
@@ -63,7 +63,7 @@ jobs:
       - name: Run on emulator
         id: run1
         continue-on-error: true
-        timeout-minutes: ${{ inputs.probe == 'dash' && 32 || 16 }}
+        timeout-minutes: ${{ (inputs.probe == 'dash' || inputs.probe == 'candidates') && 32 || 16 }}
         env:
           IME_LANG: ${{ matrix.lang }}
           PROBE: ${{ inputs.probe }}
@@ -89,7 +89,7 @@ jobs:
 
       - name: Run on emulator (boot retry)
         if: steps.run1.outcome == 'failure' && steps.boot.outputs.booted == 'no'
-        timeout-minutes: ${{ inputs.probe == 'dash' && 32 || 16 }}
+        timeout-minutes: ${{ (inputs.probe == 'dash' || inputs.probe == 'candidates') && 32 || 16 }}
         env:
           IME_LANG: ${{ matrix.lang }}
           PROBE: ${{ inputs.probe }}
@@ -116,7 +116,7 @@ jobs:
           s=$(grep EMULATOR_START out/timing.txt | awk '{print $3}')
           b=$(grep BOOTED out/timing.txt | awk '{print $3}')
           [ -n "$s" ] && [ -n "$b" ] && echo "BOOT_SECONDS $((b - s))"
-          grep -E 'RESULT|DASH' out/drive.log || true
+          grep -E 'RESULT|DASH|CAND' out/drive.log || true
           cat out/phases.log || true
 
       - uses: actions/upload-artifact@v4

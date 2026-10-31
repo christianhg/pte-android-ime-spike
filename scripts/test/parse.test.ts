@@ -7,6 +7,7 @@ import {test} from 'node:test'
 import {hasDigit, isJapanese, nestedCompositionstart, resultLine} from '../drive.ts'
 import {packageKeys, parseXml} from '../lib/hierarchy.ts'
 import {pyRepr, pySorted} from '../lib/util.ts'
+import {candidates, findLabel, gboardNodes, summary} from '../probe-candidates.ts'
 
 const GBOARD = 'com.google.android.inputmethod.latin'
 const fixture = (name: string) => readFileSync(new URL(`fixtures/${name}`, import.meta.url), 'utf8')
@@ -87,4 +88,25 @@ test('repr matches Python for quotes and escapes', () => {
   assert.equal(pyRepr('a\'b"c'), `'a\\'b"c'`)
   assert.equal(pyRepr('　'), "'\\u3000'")
   assert.equal(pyRepr({package: 'x', pid: 4264, ok: true, none: null}), "{'package': 'x', 'pid': 4264, 'ok': True, 'none': None}")
+})
+
+test('the candidates probe keeps the strip and drops the keys of the Japanese layout', () => {
+  const nodes = gboardNodes(fixture('ja-keyboard.xml'))
+  const strip = candidates(nodes)
+  assert.ok(nodes.some((n) => n.rid === 'key_pos_0_0' && n.label === 'q'))
+  assert.ok(!strip.some((n) => n.rid.startsWith('key_pos_') && !n.rid.startsWith('key_pos_header')))
+  assert.ok(findLabel(strip, '機能メニューを開く'))
+  assert.equal(findLabel(strip, 'q'), undefined)
+})
+
+test('parseXml gives each node its depth', () => {
+  assert.deepEqual(parseXml('<a><b/><c><d/></c></a>').map((n) => `${n.tag}${n.depth}`), ['a0', 'b1', 'c1', 'd2'])
+})
+
+test('the candidates summary names strip, expanded list and the committed code points', () => {
+  assert.equal(
+    summary({rep: 1, word: 2, strip: false, more: true, expanded: true, scrolled: false, committed: 'きょう今日', codepoints: ['U+304D', 'U+3087', 'U+3046', 'U+4ECA', 'U+65E5']}),
+    "r1w2:strip=no,expanded=yes,committed='きょう今日'[U+304D+U+3087+U+3046+U+4ECA+U+65E5]",
+  )
+  assert.equal(summary({rep: 3, word: 1, strip: true, more: false, expanded: null, scrolled: false, committed: '', codepoints: []}), "r3w1:strip=yes,expanded=no_more_button,committed=''[]")
 })
