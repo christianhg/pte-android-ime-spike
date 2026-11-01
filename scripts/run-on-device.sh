@@ -58,8 +58,9 @@ page=${PAGE:-editor.html}
 # The after-Enter case needs Gboard's Enter key to split the block. It runs on Japanese only.
 cases=("plain.html ''" "$page ''" "$page x")
 [ "${IME_LANG:-en}" = ja ] && cases+=("$page x+enter")
-# COMMIT=space probes the empty block only.
-[ "${COMMIT:-}" = space ] && cases=("plain.html ''" "$page ''")
+# COMMIT=space probes the empty block only. The editor page goes first, so it runs while Gboard's
+# Japanese dictionary may still be loading and Space commits kana instead of converting.
+[ "${COMMIT:-}" = space ] && cases=("$page ''" "plain.html ''")
 for args in "${cases[@]}"; do
   eval "set -- $args"
   log "case $1 prefix='$2' start"
