@@ -5,7 +5,8 @@
 import assert from 'node:assert/strict'
 import {readFileSync} from 'node:fs'
 import {test} from 'node:test'
-import {cursorControlFromLog, hasWord, probeLine} from '../probe.ts'
+import {probeLine} from '../probe.ts'
+import {charsPerPixel, chromePid, cursorControlFromLog, dragDistance, evidence, hasWord, type Step} from '../lib/probe-logic.ts'
 import {
   charKey,
   classifyLayout,
@@ -19,10 +20,18 @@ import {
   localeMatches,
   onLayout,
   pickEmoji,
+  enabledLocales,
+  layoutTiles,
+  LATIN_IME,
+  originFromTap,
+  originFromWindow,
+  pickRow,
   roleKey,
+  statusBarHeight,
+  subtypeHashFromLog,
   subtypeLocale,
+  subtypesLine,
   subtypeTokens,
-  webViewBounds,
 } from '../lib/gboard.ts'
 import {parseXml, switchRow} from '../lib/hierarchy.ts'
 
@@ -165,12 +174,108 @@ test('downloadStates picks the download and install notes', () => {
   assert.deepEqual(downloadStates(xml), ['Downloading 42%', 'Installed'])
 })
 
-test('page coordinates land on the screen through the WebView bounds', () => {
-  const webView = webViewBounds(fixture('en-keyboard.xml'))
-  assert.deepEqual(webView, {left: 0, top: 275, right: 1080, bottom: 1520})
-  // The editor's root div sits at CSS (8, 8) on a 2.625 dpr screen: the dump puts it at (21, 296).
-  assert.deepEqual(cssToScreen(8, 8, webView!, {dpr: 2.625, offsetLeft: 0, offsetTop: 0, scale: 1}), [21, 296])
-  assert.deepEqual(cssToScreen(8, 108, webView!, {dpr: 2.625, offsetLeft: 0, offsetTop: 100, scale: 1}), [21, 296], 'a panned visual viewport')
+test('page coordinates land on the screen from an origin, a pan and a zoom', () => {
+  // Round 1's en dump: the WebView starts at y=275 and the editor's root div at CSS (8, 8) is drawn at (21, 296).
+  const origin = {left: 0, top: 275}
+  assert.deepEqual(cssToScreen(8, 8, origin, {dpr: 2.625, offsetLeft: 0, offsetTop: 0, scale: 1}), [21, 296])
+  assert.deepEqual(cssToScreen(8, 108, origin, {dpr: 2.625, offsetLeft: 0, offsetTop: 100, scale: 1}), [21, 296], 'a panned visual viewport')
+  assert.deepEqual(cssToScreen(8, 8, origin, {dpr: 2.625, offsetLeft: 0, offsetTop: 0, scale: 2}), [42, 317], 'a zoomed visual viewport')
+})
+
+test('the calibration tap gives the origin back, panned or not', () => {
+  const vp = {dpr: 2.625, offsetLeft: 0, offsetTop: 0, scale: 1}
+  assert.deepEqual(originFromTap([864, 1060], {x: 329.1428, y: 299.0476}, vp), {left: 0, top: 275})
+  const panned = {...vp, offsetTop: 100}
+  // clientY is relative to the visual viewport already, so a pan does not change the origin.
+  assert.deepEqual(originFromTap([864, 1060], {x: 329.1428, y: 299.0476}, panned), {left: 0, top: 275})
+})
+
+test('without a tap, window metrics and the status bar estimate the origin', () => {
+  const bar = statusBarHeight(fixture('en-keyboard.xml'))
+  assert.equal(bar, 128)
+  // Chrome's toolbar is 147px (128..275) on the 2.625 dpr pixel_6: 56 CSS px between outer and inner height.
+  assert.deepEqual(originFromWindow({dpr: 2.625, innerHeight: 474, outerHeight: 530, screenHeight: 914}, bar!), {left: 0, top: 275})
+})
+
+test('the run 1 notifications promo hides the WebView, which is why geometry no longer reads it', () => {
+  const promo = parseXml(fixture('r1-chrome-promo.xml'))
+  assert.ok(promo.some((n) => n.attrs.text === 'Chrome notifications make things easier'))
+  assert.ok(promo.some((n) => n.attrs.text === 'No thanks'))
+  assert.ok(!promo.some((n) => n.attrs.class === 'android.webkit.WebView'))
+})
+
+const titleRows = (name: string) => parseXml(fixture(name)).filter((n) => n.attrs['resource-id'] === 'android:id/title').map((n) => ({text: n.attrs.text!}))
+
+test('rows: the search and variant lists run 1 showed now match', () => {
+  assert.equal(pickRow(titleRows('r1-vi-search.xml'), LANGS.vi!.rows)?.text, 'Tiếng Việt (Việt Nam)')
+  // (مصر) is below the fold on this page, so the next preference on screen wins rather than a scroll.
+  assert.equal(pickRow(titleRows('r1-ar-variants.xml'), LANGS.ar!.rows)?.text, 'العربية (المملكة العربية السعودية)')
+  assert.equal(pickRow(titleRows('r1-hi-variants.xml'), LANGS.hi!.rows)?.text, 'हिन्दी (भारत)')
+  // The Arabic search's first page holds only script variants of other languages, so scrolling must go on.
+  assert.equal(pickRow(titleRows('r1-ar-search.xml'), LANGS.ar!.rows), undefined)
+  assert.equal(pickRow([{text: 'Deutsch (Belgien)'}, {text: 'Deutsch (Deutschland)'}], LANGS.de!.rows)?.text, 'Deutsch (Deutschland)', 'pattern order beats list order')
+})
+
+test('layoutTiles: only what follows Navigate up, so a title like हिन्दी is never a tile', () => {
+  assert.deepEqual(layoutTiles(fixture('r1-ko-layouts.xml')).map((t) => `${t.desc}${t.selected ? '[x]' : ''}`), ['두벌식[x]', '단모음', '10키'])
+  assert.deepEqual(layoutTiles(fixture('r1-hi-variants.xml')), [], 'a variant page has no tiles')
+  assert.deepEqual(layoutTiles(fixture('r1-ar-variants.xml')), [])
+  assert.ok(LANGS.ko!.layout!.test('두벌식'))
+  assert.ok(LANGS.zh!.layout!.test('拼音'))
+  assert.ok(!LANGS.zh!.layout!.test('9 键'))
+})
+
+test('subtypes: setup logs hash=tag pairs and probe finds the hash per language', () => {
+  const dump = readFileSync(new URL('fixtures/r1-ko-ims-excerpt.txt', import.meta.url), 'utf8')
+  const enabled = `${LATIN_IME};1594443099;-1906255757:com.google.android.tts/x.VoiceInputMethodService`
+  const subtypes = enabledLocales(enabled, dump)
+  assert.deepEqual(subtypes, [{hash: '1594443099', locale: 'en-US'}, {hash: '-1906255757', locale: 'ko-KR'}])
+  const line = subtypesLine(subtypes)
+  assert.equal(line, 'SUBTYPES 1594443099=en-US -1906255757=ko-KR')
+  const log = `SETUP ko step 1 settings\n${line}\nSETUP ko done\n`
+  assert.equal(subtypeHashFromLog(log, 'ko'), '-1906255757')
+  assert.equal(subtypeHashFromLog(log, 'en'), '1594443099')
+  assert.equal(subtypeHashFromLog(log, 'ar'), undefined)
+  assert.equal(subtypeHashFromLog('SUBTYPES 1=iw-IL', 'he'), '1')
+})
+
+const step = (name: string, text: string, focus: number, events: Step['events']): Step => ({step: name, text, dom: text, selection: {inEditor: true, anchor: focus, focus, selected: '', collapsed: true}, events})
+
+test('evidence counts only the action own events and spots composition', () => {
+  const before = [{type: 'beforeinput', inputType: 'insertText', data: 'x'}]
+  const own = [
+    {type: 'compositionstart', data: ''},
+    {type: 'beforeinput', inputType: 'insertCompositionText', data: 'ㅎ'},
+    {type: 'beforeinput', inputType: 'insertCompositionText', data: '하'},
+    {type: 'input', inputType: 'insertCompositionText', data: '하'},
+  ]
+  const e = evidence([step('start', '', 0, before), step('typed', '하', 1, [...before, ...own])])
+  assert.deepEqual(e.eventTypes, ['compositionstart', 'beforeinput:insertCompositionText', 'input:insertCompositionText'])
+  assert.equal(e.eventCounts['beforeinput:insertCompositionText'], 2)
+  assert.equal(e.composition, true)
+  assert.equal(e.selectionBefore?.focus, 0)
+  assert.equal(e.selectionAfter?.focus, 1)
+  assert.deepEqual([e.textBefore, e.textAfter], ['', '하'])
+  const plain = evidence([step('start', '', 0, []), step('typed', 'K', 1, [{type: 'beforeinput', inputType: 'insertText', data: 'K'}])])
+  assert.equal(plain.composition, false)
+  assert.deepEqual(evidence([]).eventTypes, [])
+})
+
+test('space drag calibration: characters per pixel before the caret hits 0, and the distance for N', () => {
+  // Round 1, th-2: three key widths (321px) took the caret from 5 to 0. Samples like these give ~1 char / 40px.
+  const samples = [{px: 6, focus: 5}, {px: 30, focus: 5}, {px: 42, focus: 4}, {px: 84, focus: 3}, {px: 120, focus: 2}, {px: 400, focus: 0}]
+  const k = charsPerPixel(5, samples)!
+  assert.ok(Math.abs(k - 0.0246) < 0.001, String(k))
+  assert.equal(dragDistance(3, 5, samples, k), 120)
+  assert.equal(dragDistance(4, 5, samples.slice(0, 5), k), Math.round(4 / k))
+  assert.equal(charsPerPixel(5, [{px: 6, focus: 5}, {px: 12, focus: 0}]), null, 'jumped straight to 0')
+  assert.equal(charsPerPixel(5, []), null)
+})
+
+test('chromePid reads pidof, which is empty once Chrome is gone', () => {
+  assert.equal(chromePid('4714\n'), 4714)
+  assert.equal(chromePid(''), undefined)
+  assert.equal(chromePid('4714 5521'), 4714)
 })
 
 test('every language has keys, an expected word, and an ASCII search', () => {
@@ -189,6 +294,7 @@ test('probe log helpers', () => {
   assert.equal(cursorControlFromLog('SETUP en CURSOR_CONTROL setting=absent reason="no row"'), false)
   assert.equal(cursorControlFromLog(''), undefined)
   assert.ok(hasWord('tiếng ', 'tiếng'))
+  assert.ok(hasWord('Kyou ', 'kyou'), 'Gboard capitalises the first word')
   assert.ok(hasWord('tiếng', 'tiếng'), 'decomposed Vietnamese counts')
   assert.equal(
     probeLine('ko', {action: 'word', layout: 'ko', status: 'ok', reason: '', steps: [{step: 'space', text: '한국\xa0', dom: null, selection: {inEditor: true}, events: []}]}),

@@ -41,7 +41,7 @@ fi
 
 log "logcat"
 a logcat -c
-(timeout 900 adb logcat -v time > "$out/logcat.txt" 2>&1 &)
+(timeout 3000 adb logcat -v time > "$out/logcat.txt" 2>&1 &)
 
 log "http server"
 node scripts/serve.ts page/dist 8765 < /dev/null > "$out/http.log" 2>&1 &
@@ -57,6 +57,21 @@ if [ -n "${PROBE_LANG:-}" ]; then
   log "probe setup $PROBE_LANG"
   timeout -k 10 360 node scripts/setup-lang.ts "$PROBE_LANG" "$out" 2>&1 | tee -a "$out/setup.log"
   log "probe setup rc=${PIPESTATUS[0]}"
+  # Play services updates its Dynamite modules a few minutes after boot and force-restarts every process
+  # that loaded one, Chrome included ("Module config changed, forcing restart due to module
+  # googlecertificates"). Wait until none has come for 60s (max 4 min). probe.ts relaunches Chrome if a
+  # late one still lands.
+  log "dynamite settle start"
+  # Count the restarts in the background capture rather than clearing the device log under it.
+  quiet=0
+  seen=$(grep -c "forcing restart due to module" "$out/logcat.txt")
+  for i in $(seq 1 48); do
+    now=$(grep -c "forcing restart due to module" "$out/logcat.txt")
+    if [ "$now" -gt "$seen" ]; then quiet=0; seen=$now; else quiet=$((quiet + 5)); fi
+    [ $quiet -ge 60 ] && break
+    sleep 5
+  done
+  log "dynamite settle done after $((i * 5))s quiet=$quiet restarts=$seen"
   log "probe $PROBE_LANG"
   timeout -k 10 1500 node scripts/probe.ts "$PROBE_LANG" "$out" 2>&1 | tee -a "$out/probe.log"
   rc=${PIPESTATUS[0]}

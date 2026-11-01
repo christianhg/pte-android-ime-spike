@@ -10,8 +10,11 @@ export type Lang = {
   code: string
   /** Typed into the Add keyboard search with adb `input text`, so ASCII. */
   search: string
-  /** The result row in the language list. */
-  row: RegExp
+  /**
+   * Rows to tap in the language list, best first. The same patterns pick the variant on the page some
+   * languages open next (Arabic lists its regions, Hindi lists Hinglish and हिन्दी (भारत)).
+   */
+  rows: RegExp[]
   /** The layout tile to leave as the only one selected. Undefined keeps Gboard's default. */
   layout?: RegExp
   /** Keys to tap for the probe word, in order. */
@@ -24,11 +27,11 @@ export type Lang = {
 }
 
 export const LANGS: Record<string, Lang> = {
-  en: {code: 'en', search: 'English', row: /^English \(US\)$/, keys: [...'kyou'], commit: 'space', expect: 'kyou'},
+  en: {code: 'en', search: 'English', rows: [/^English \(US\)$/], keys: [...'kyou'], commit: 'space', expect: 'kyou'},
   ko: {
     code: 'ko',
     search: 'Korean',
-    row: /^(Korean|한국어)$/,
+    rows: [/^(Korean|한국어)$/],
     layout: /2.?(set|bulsik|벌식)|dubeolsik|두벌식/i,
     keys: ['ㅎ', 'ㅏ', 'ㄴ', 'ㄱ', 'ㅜ', 'ㄱ'],
     commit: 'space',
@@ -37,8 +40,9 @@ export const LANGS: Record<string, Lang> = {
   zh: {
     code: 'zh',
     search: 'Chinese',
-    row: /^(Chinese.*Simplified|中文.*简体|简体中文)/i,
-    layout: /pinyin.*(qwerty|全键)|拼音.*全键|全键盘/i,
+    rows: [/^(Chinese.*Simplified|中文.*简体|简体中文)/i],
+    // Run 1 showed the tiles 拼音[x] | 9 键 | 手写: 拼音 is the full Pinyin QWERTY layout.
+    layout: /^(拼音|pinyin)( qwerty| 全键盘)?$/i,
     keys: [...'nihao'],
     commit: 'candidate',
     expect: '你好',
@@ -46,17 +50,22 @@ export const LANGS: Record<string, Lang> = {
   hi: {
     code: 'hi',
     search: 'Hindi',
-    row: /^(Hindi|हिन्दी|हिंदी)$/,
-    layout: /devanagari|^हिन्दी$|^हिंदी$/i,
+    // हिन्दी opens a page with Hinglish and हिन्दी (भारत). The second is the Devanagari keyboard.
+    rows: [/^हिन्दी \(भारत\)$/, /^Hindi \(India\)$/, /^(Hindi|हिन्दी|हिंदी)$/],
+    layout: /devanagari|^(हिन्दी|हिंदी)$/i,
     keys: ['न', 'म', 'स', '्', 'त', 'े'],
     commit: 'space',
     expect: 'नमस्ते',
   },
-  ar: {code: 'ar', search: 'Arabic', row: /^(Arabic|العربية)$/, keys: [...'مرحبا'], commit: 'space', expect: 'مرحبا'},
-  he: {code: 'he', search: 'Hebrew', row: /^(Hebrew|עברית)$/, keys: [...'שלום'], commit: 'space', expect: 'שלום'},
-  th: {code: 'th', search: 'Thai', row: /^(Thai|ไทย)$/, keys: [...'สวัสดี'], commit: 'space', expect: 'สวัสดี'},
-  vi: {code: 'vi', search: 'Vietnamese', row: /^(Vietnamese|Tiếng Việt)$/, layout: /telex/i, keys: [...'tieengs'], commit: 'space', expect: 'tiếng'},
-  de: {code: 'de', search: 'German', row: /^(German|Deutsch)( \(Germany\)| \(Deutschland\))?$/, layout: /^QWERTZ$/i, keys: [...'für'], longPress: {ü: 'u'}, commit: 'space', expect: 'für'},
+  // العربية opens a page of regional variants. Run 1 listed (مصر), (المملكة العربية السعودية) and others.
+  ar: {
+    code: 'ar',
+    search: 'Arabic',
+    rows: [/^العربية \(مصر\)$/, /^العربية \(المملكة العربية السعودية\)$/, /^العربية( \(.+\))?$/, /^Arabic( \(.+\))?$/], keys: [...'مرحبا'], commit: 'space', expect: 'مرحبا'},
+  he: {code: 'he', search: 'Hebrew', rows: [/^(Hebrew|עברית)( \(.+\))?$/], keys: [...'שלום'], commit: 'space', expect: 'שלום'},
+  th: {code: 'th', search: 'Thai', rows: [/^(Thai|ไทย)$/], keys: [...'สวัสดี'], commit: 'space', expect: 'สวัสดี'},
+  vi: {code: 'vi', search: 'Vietnamese', rows: [/^(Vietnamese|Tiếng Việt)( \(.+\))?$/], layout: /telex/i, keys: [...'tieengs'], commit: 'space', expect: 'tiếng'},
+  de: {code: 'de', search: 'German', rows: [/^(German|Deutsch) \((Germany|Deutschland)\)$/, /^(German|Deutsch)$/], layout: /^QWERTZ$/i, keys: [...'für'], longPress: {ü: 'u'}, commit: 'space', expect: 'für'},
 }
 
 export type GNode = {label: string; desc: string; text: string; id: string; bounds: Bounds; x: number; y: number}
@@ -76,7 +85,7 @@ export function gboardNodes(xml: string): GNode[] {
   return nodes
 }
 
-export type Role = 'space' | 'delete' | 'enter' | 'shift' | 'language' | 'emoji' | 'letters'
+export type Role = 'space' | 'delete' | 'enter' | 'shift' | 'language' | 'emoji' | 'letters' | 'symbols'
 
 const ROLE_IDS: Partial<Record<Role, string[]>> = {
   space: ['key_pos_space'],
@@ -84,6 +93,7 @@ const ROLE_IDS: Partial<Record<Role, string[]>> = {
   enter: ['key_pos_ime_action'],
   shift: ['key_pos_shift'],
   language: ['key_pos_qwerty_globe'],
+  symbols: ['key_pos_switch_to_symbol'],
 }
 
 // Labels in English and in the languages whose layouts localise them (ja and zh seen so far).
@@ -95,6 +105,7 @@ const ROLE_LABELS: Record<Role, RegExp> = {
   language: /^(next language|switch to|globe|次の言語|下一种语言|切换语言)/i,
   emoji: /emoji|絵文字|表情/i,
   letters: /^(abc|back to keyboard|letters|alphabet|返回键盘|キーボードに戻る)/i,
+  symbols: /^(symbol keyboard|symbols|\?123)$/i,
 }
 
 /** The key that plays `role`, by resource id first and label second. */
@@ -195,19 +206,45 @@ export function subtypeTokens(dump: string): string[] {
 
 export type Viewport = {dpr: number; offsetLeft: number; offsetTop: number; scale: number}
 
+/** Where the page's CSS (0, 0) sits on screen, in screen pixels. */
+export type Origin = {left: number; top: number}
+
 /**
- * Screen pixels for a point in CSS pixels of the layout viewport. The WebView node's bounds give the
- * content origin on screen, and the visual viewport says how far the page is panned and zoomed within it.
+ * Screen pixels for a point in CSS pixels of the layout viewport. The visual viewport says how far the page
+ * is panned and zoomed, which moves when Gboard opens and Chrome scrolls the caret into view.
  */
-export function cssToScreen(x: number, y: number, webView: Bounds, vp: Viewport): [number, number] {
+export function cssToScreen(x: number, y: number, origin: Origin, vp: Viewport): [number, number] {
   const k = vp.dpr * vp.scale
-  return [Math.round(webView.left + (x - vp.offsetLeft) * k), Math.round(webView.top + (y - vp.offsetTop) * k)]
+  return [Math.round(origin.left + (x - vp.offsetLeft) * k), Math.round(origin.top + (y - vp.offsetTop) * k)]
 }
 
-/** Bounds of Chrome's WebView, where the page content starts on screen. */
-export function webViewBounds(xml: string): Bounds | undefined {
-  const node = parseXml(xml).find((n) => n.attrs.class === 'android.webkit.WebView' && n.attrs.package === 'com.android.chrome')
-  return node ? parseBounds(node.attrs.bounds!) : undefined
+/**
+ * The content origin from a calibration tap: the screen pixel the driver tapped, less where the page saw
+ * the pointer land (clientX/Y, already relative to the visual viewport's pan, times its zoom).
+ */
+export function originFromTap(screen: [number, number], client: {x: number; y: number}, vp: Viewport): Origin {
+  const k = vp.dpr * vp.scale
+  return {left: Math.round(screen[0] - client.x * k), top: Math.round(screen[1] - client.y * k)}
+}
+
+export type WindowMetrics = {dpr: number; innerHeight: number; outerHeight: number; screenHeight: number}
+
+/**
+ * The content origin from window metrics alone, before any tap. Chrome's toolbar sits above the content,
+ * so the content starts outerHeight - innerHeight CSS pixels below the window top, and the window starts
+ * below the status bar, which `statusBar` gives in screen pixels.
+ */
+export function originFromWindow(m: WindowMetrics, statusBar: number): Origin {
+  return {left: 0, top: Math.round(statusBar + (m.outerHeight - m.innerHeight) * m.dpr)}
+}
+
+/** Height of the status bar in screen pixels, from a dump's systemui status bar node. */
+export function statusBarHeight(xml: string): number | undefined {
+  const node = parseXml(xml).find((n) => n.attrs.package === 'com.android.systemui' && /status_bar(_container)?$/.test(n.attrs['resource-id'] ?? ''))
+  if (node) return parseBounds(node.attrs.bounds!).bottom
+  // Some images name it differently. The first full-width systemui strip from the top serves.
+  const strip = parseXml(xml).find((n) => n.attrs.package === 'com.android.systemui' && parseBounds(n.attrs.bounds ?? '[0,0][0,0]').top === 0)
+  return strip ? parseBounds(strip.attrs.bounds!).bottom : undefined
 }
 
 /**
@@ -241,4 +278,53 @@ export function onLayout(target: string, locale: string | undefined, layout: str
   const scriptKnown = layout !== 'latin' && layout !== 'none'
   if (locale !== undefined) return localeMatches(locale, target) && (!scriptKnown || layout === target)
   return target === 'en' ? layout === 'latin' : layout === target
+}
+
+/** The first row matching the best pattern that matches any row, so pattern order sets the priority. */
+export function pickRow<T extends {text: string}>(rows: T[], patterns: RegExp[]): T | undefined {
+  for (const p of patterns) {
+    const hit = rows.find((r) => p.test(r.text))
+    if (hit) return hit
+  }
+  return undefined
+}
+
+export type Tile = {desc: string; selected: boolean; x: number; y: number}
+
+/**
+ * The layout tiles on a language's layout page, from Gboard's content-desc nodes. The page title (the
+ * language name) and Navigate up come first and are not tiles, and a title can read like a layout name
+ * (हिन्दी), so only what follows Navigate up counts. Empty when the screen is not a layout page.
+ */
+export function layoutTiles(xml: string): Tile[] {
+  const all = parseXml(xml)
+    .filter((n) => n.attrs.package === GBOARD && n.attrs['content-desc'])
+    .map((n) => {
+      const [x, y] = center(parseBounds(n.attrs.bounds!))
+      return {desc: n.attrs['content-desc']!, selected: n.attrs.selected === 'true', x, y}
+    })
+  const up = all.findIndex((t) => t.desc === 'Navigate up')
+  return up < 0 ? [] : all.slice(up + 1)
+}
+
+export const LATIN_IME = `${GBOARD}/com.android.inputmethod.latin.LatinIME`
+
+/** Each enabled Gboard subtype hash with its language tag, from the enabled setting and dumpsys. */
+export function enabledLocales(enabledSetting: string, dump: string): Array<{hash: string; locale: string | undefined}> {
+  return enabledSubtypes(enabledSetting, LATIN_IME).map((hash) => ({hash, locale: subtypeLocale(dump, hash)}))
+}
+
+/** `SUBTYPES <hash>=<tag> ...`, the line setup-lang logs and probe reads back. */
+export function subtypesLine(subtypes: Array<{hash: string; locale: string | undefined}>): string {
+  return `SUBTYPES ${subtypes.map((s) => `${s.hash}=${s.locale ?? '?'}`).join(' ')}`
+}
+
+/** The hash of the enabled subtype for `code` from a setup log's SUBTYPES line, if it has one. */
+export function subtypeHashFromLog(log: string, code: string): string | undefined {
+  const line = /SUBTYPES ((?:-?\d+=\S+ ?)*)/.exec(log)?.[1] ?? ''
+  for (const pair of line.trim().split(/\s+/)) {
+    const [hash, locale] = pair.split('=')
+    if (hash && locale && locale !== '?' && localeMatches(locale, code)) return hash
+  }
+  return undefined
 }

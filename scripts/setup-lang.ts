@@ -7,7 +7,7 @@
 
 import {writeFileSync} from 'node:fs'
 import {adbOutput, adbPassthrough} from './lib/adb.ts'
-import {downloadStates, enabledSubtypes, GBOARD, LANGS, subtypeTokens, type Lang} from './lib/gboard.ts'
+import {downloadStates, enabledLocales, enabledSubtypes, GBOARD, LANGS, LATIN_IME, layoutTiles, localeMatches, pickRow, subtypesLine, type Lang} from './lib/gboard.ts'
 import {center, parseBounds, parseXml, switchRow} from './lib/hierarchy.ts'
 import {Device, type UiObject} from './lib/u2.ts'
 import {sleep} from './lib/util.ts'
@@ -86,6 +86,26 @@ function titles(xml: string): Array<{text: string; x: number; y: number}> {
     })
 }
 
+/**
+ * Find a row matching `lang.rows` in the list on screen, scrolling the list (never pressing Back, which
+ * closes the search on Gboard v15 and drops back to the unfiltered list, as run 1 did for ar and vi).
+ */
+async function findRow(d: Device, lang: Lang, xml: string, name: string): Promise<{text: string; x: number; y: number}> {
+  for (let i = 0; i < 40; i++) {
+    const row = pickRow(titles(xml), lang.rows)
+    if (row) return row
+    if (!(await d.find({scrollable: true}).exists())) break
+    const before = JSON.stringify(titles(xml).map((t) => t.text))
+    await d.find({scrollable: true}).scrollForward(20)
+    xml = await d.dumpHierarchy()
+    // The end of the list: a scroll that changes nothing.
+    if (JSON.stringify(titles(xml).map((t) => t.text)) === before) break
+  }
+  log(`rows ${JSON.stringify(titles(xml).map((t) => t.text).slice(0, 20))}`)
+  await snap(d, `missing-${name}`)
+  throw new Error(`no row matching ${lang.rows.join(' or ')} on the ${name} screen`)
+}
+
 async function addLanguage(d: Device, lang: Lang): Promise<void> {
   await tapText(d, '^Languages$', 'languages')
   await tapText(d, '^Add keyboard$', 'add-keyboard')
@@ -94,62 +114,45 @@ async function addLanguage(d: Device, lang: Lang): Promise<void> {
   await adbPassthrough(['shell', 'input', 'text', lang.search])
   await sleep(2)
   let xml = await snap(d, 'search-typed')
-  // Gboard v12 keeps the query when Back hides the keyboard, v15 closes the search, so only press Back
-  // when no result row shows.
-  if (!titles(xml).some((t) => lang.row.test(t.text))) {
-    await adbPassthrough(['shell', 'input', 'keyevent', 'KEYCODE_BACK'])
-    await sleep(1)
-    xml = await snap(d, 'search')
-  }
-  for (let i = 0; i < 60 && !titles(xml).some((t) => lang.row.test(t.text)); i++) {
-    // Fall back to the alphabetical All languages list.
-    if (!(await d.find({scrollable: true}).exists())) break
-    await d.find({scrollable: true}).scrollForward(20)
-    xml = await d.dumpHierarchy()
-  }
-  const row = titles(xml).find((t) => lang.row.test(t.text))
   log(`rows ${JSON.stringify(titles(xml).map((t) => t.text).slice(0, 20))}`)
-  if (!row) {
-    await snap(d, 'missing-row')
-    throw new Error(`no row matching ${lang.row} in the search results`)
+  let row = await findRow(d, lang, xml, 'search')
+  // A language with regional or script variants opens a list of them instead of its layout page. Tap the
+  // best variant until the layout page (its Navigate up and layout tiles) shows, two levels at most.
+  for (let level = 0; level < 3; level++) {
+    log(`tapping row ${JSON.stringify(row.text)}`)
+    await d.click(row.x, row.y)
+    await sleep(2)
+    xml = await snap(d, level ? `variant-${level}` : 'language')
+    if (layoutTiles(xml).length) break
+    if (!titles(xml).length) throw new Error(`neither layout tiles nor variant rows after tapping ${JSON.stringify(row.text)}`)
+    log(`variants ${JSON.stringify(titles(xml).map((t) => t.text).slice(0, 20))}`)
+    row = await findRow(d, lang, xml, 'variants')
   }
-  log(`tapping row ${JSON.stringify(row.text)}`)
-  await d.click(row.x, row.y)
-  await sleep(2)
-  xml = await snap(d, 'language')
+  if (!layoutTiles(xml).length) throw new Error('never reached the layout page')
   await pickLayout(d, lang, xml)
-  if (await d.find({textMatches: '(?i)^(Done|Add)$'}).exists()) await tapText(d, '^(Done|Add)$', 'done')
-  else log('no Done button, the language was added without a layout screen')
-}
-
-type Tile = {desc: string; selected: boolean; x: number; y: number; parent: number}
-
-function tiles(xml: string): Tile[] {
-  return parseXml(xml)
-    .filter((n) => n.attrs.package === GBOARD && n.attrs['content-desc'])
-    .map((n) => {
-      const [x, y] = center(parseBounds(n.attrs.bounds!))
-      return {desc: n.attrs['content-desc']!, selected: n.attrs.selected === 'true', x, y, parent: n.parent}
-    })
+  if (!(await d.find({textMatches: '(?i)^(Done|Add)$'}).exists())) {
+    await snap(d, 'missing-done')
+    throw new Error('no Done button on the layout page')
+  }
+  await tapText(d, '^(Done|Add)$', 'done')
 }
 
 /**
- * Leave the wanted layout as the only one selected, as setup-ja.ts does for QWERTY. The other tiles are
- * the wanted tile's siblings. A missing tile keeps Gboard's default layout, and the log lists the tiles so
- * the pattern can be fixed in the next round.
+ * Leave the wanted layout as the only one selected, as setup-ja.ts does for QWERTY. A missing tile keeps
+ * Gboard's default layout, and the log lists the tiles so the pattern can be fixed.
  */
 async function pickLayout(d: Device, lang: Lang, xml: string): Promise<void> {
-  log(`tiles ${tiles(xml).map((t) => `${t.desc}${t.selected ? '[x]' : '[ ]'}`).join(' | ')}`)
+  log(`tiles ${layoutTiles(xml).map((t) => `${t.desc}${t.selected ? '[x]' : '[ ]'}`).join(' | ')}`)
   if (!lang.layout) return
   const want = lang.layout
   for (let i = 0; i < 3; i++) {
-    const all = tiles(xml)
+    const all = layoutTiles(xml)
     const target = all.find((t) => want.test(t.desc))
     if (!target) {
       log(`layout tile ${want} missing, keeping the default layout`)
       return
     }
-    const wrong = all.filter((t) => t.parent === target.parent && t.selected && !want.test(t.desc))
+    const wrong = all.filter((t) => t.selected && !want.test(t.desc))
     if (target.selected && !wrong.length) {
       log(`layout ${JSON.stringify(target.desc)} is the only one selected`)
       await snap(d, 'layouts')
@@ -221,10 +224,17 @@ async function main(): Promise<void> {
 
   const ims = await adbOutput(['shell', 'dumpsys', 'input_method'])
   writeFileSync(`${out}/${code}-ims.txt`, ims)
-  log(`subtypes ${subtypeTokens(ims).join(' | ')}`)
   const enabled = await adbOutput(['shell', 'settings', 'get', 'secure', 'enabled_input_methods'])
-  log(`enabled gboard subtypes ${JSON.stringify(enabledSubtypes(enabled, `${GBOARD}/com.android.inputmethod.latin.LatinIME`))} raw=${enabled.trim()}`)
+  const subtypes = enabledLocales(enabled, ims)
+  log(`enabled gboard subtypes ${JSON.stringify(enabledSubtypes(enabled, LATIN_IME))} raw=${enabled.trim()}`)
+  // probe.ts reads this line to select the subtype directly.
+  console.log(subtypesLine(subtypes))
   await adbPassthrough(['shell', 'input', 'keyevent', 'KEYCODE_HOME'])
+  // Run 1 added ar and hi without a subtype and still said done. Say so instead.
+  if (code !== 'en' && !subtypes.some((s) => s.locale !== undefined && localeMatches(s.locale, code))) {
+    log(`SUBTYPE_MISSING no enabled Gboard subtype for ${code}`)
+    throw new Error(`no enabled Gboard subtype for ${code} after setup`)
+  }
   log('done')
 }
 
