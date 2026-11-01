@@ -1,15 +1,16 @@
-// Probe which Gboard keyboard actions reach the editor, in English and in one other language.
+// Probe which Gboard keyboard actions reach the editor, in English and in one other language, on each page:
+// the Portable Text Editor and a plain contenteditable as the control, so editor bugs show up as differences.
 //
-// Each action starts from a reloaded editor with one empty block, so actions do not depend on each other.
+// Each action starts from a reloaded page with one empty block, so actions do not depend on each other.
 // After every step it records the editor value, the DOM text, the DOM selection and the full
 // composition/beforeinput/input event log, and each action gets an evidence summary of those. An action
 // ends ok, failed or unsupported, with a reason, and the probe moves on either way.
 //
 // Prints one line per action:
-//   PROBE lang=ko layout=ko action=word status=ok text='한국 ' reason=''
+//   PROBE lang=ko page=editor editor=8.2.10 layout=ko action=word status=ok text='한국 ' reason=''
 // and writes everything to <outdir>/probe-<lang>.json.
 //
-// Usage: node scripts/probe.ts <lang> <outdir>
+// Usage: PROBE_PAGES='editor plain' node scripts/probe.ts <lang> <outdir>
 
 import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs'
 import {adb, adbOutput} from './lib/adb.ts'
@@ -21,6 +22,7 @@ import {
   cssToScreen,
   emojiPanelOpen,
   firstCandidate,
+  languagePickerOpen,
   GBOARD,
   gboardNodes,
   LANGS,
@@ -41,7 +43,7 @@ import {
   type Role,
   type Viewport,
 } from './lib/gboard.ts'
-import {charsPerPixel, chromePid, cursorControlFromLog, dragSign, evidence, hasWord, type DragSample, type Selection, type Step} from './lib/probe-logic.ts'
+import {charsPerPixel, chromePid, cursorControlFromLog, dragSign, evidence, hasWord, pageInfo, pageUrl, parsePages, type DragSample, type Selection, type Step} from './lib/probe-logic.ts'
 import {Device} from './lib/u2.ts'
 import {errorRepr, phase, pyRepr, safePath, sleep} from './lib/util.ts'
 
@@ -52,7 +54,8 @@ function writeFile(path: string, data: string): void {
 
 const CHROME = 'com.android.chrome'
 const PORT = 8765
-const URL_ = `http://localhost:${PORT}/editor.html?prefix=`
+// The page under test. main() points it at each page in turn.
+let URL_ = pageUrl('editor', PORT)
 const ACTION_TIMEOUT = 75
 
 export type Status = 'ok' | 'failed' | 'unsupported'
@@ -160,6 +163,19 @@ const MIDDLE_GRAPHEME_JS = `(() => { ${OFFSET_JS}
   const caret = document.caretRangeFromPoint(edge, (b.top + b.bottom) / 2);
   return {k, rect: {left: b.left, right: b.right, top: b.top, bottom: b.bottom}, edge, rtl,
     caretAtEdge: caret && root.contains(caret.startContainer) ? offsetOf(caret.startContainer, caret.startOffset) : null,
+    word: text.slice(0, text.trimEnd().length), viewport: ${VIEWPORT_JS}};
+})()`
+
+/**
+ * The first grapheme of the editable's text: its client rect and the word it starts. Long-press goes here,
+ * away from the caret, which sits at the end of the word after typing.
+ */
+const FIRST_GRAPHEME_JS = `(() => { const root = document.querySelector('[contenteditable]');
+  const text = root.textContent; const seg = [...new Intl.Segmenter().segment(text)][0]; if (!seg) return null;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT); const node = walker.nextNode(); if (!node) return null;
+  const r = document.createRange(); r.setStart(node, 0); r.setEnd(node, Math.min(seg.segment.length, node.length));
+  const b = r.getBoundingClientRect();
+  return {grapheme: seg.segment, rect: {left: b.left, right: b.right, top: b.top, bottom: b.bottom},
     word: text.slice(0, text.trimEnd().length), viewport: ${VIEWPORT_JS}};
 })()`
 
@@ -309,10 +325,10 @@ async function tapRole(d: Device, role: Role): Promise<GNode> {
 const labels = (nodes: GNode[]) => nodes.map((n) => n.label).slice(0, 80)
 
 /** Tap the key for `ch`: on the base layer, under Shift, or in the long-press popup of a base key. */
-/** Tap the key for `ch`: on the base layer, under Shift, or by long-pressing a base key. */
-async function typeChar(d: Device, lang: Lang, ch: string, prev?: string): Promise<void> {
+/** Tap the key for `ch`: on the base layer, under Shift, or by long-pressing a base key. `typed` is the word so far. */
+async function typeChar(d: Device, lang: Lang, ch: string, typed = ''): Promise<void> {
   let nodes = await keys(d)
-  const direct = charKey(nodes, ch, prev)
+  const direct = charKey(nodes, ch, typed)
   if (direct) {
     await d.click(direct.x, direct.y)
     await sleep(0.4)
@@ -341,7 +357,7 @@ async function typeChar(d: Device, lang: Lang, ch: string, prev?: string): Promi
     await d.click(shift.x, shift.y)
     await sleep(0.6)
     nodes = await keys(d)
-    const shifted = charKey(nodes, ch, prev)
+    const shifted = charKey(nodes, ch, typed)
     if (shifted) {
       await d.click(shifted.x, shifted.y)
       await sleep(0.4)
@@ -355,7 +371,7 @@ async function typeChar(d: Device, lang: Lang, ch: string, prev?: string): Promi
 }
 
 async function typeKeys(d: Device, lang: Lang, chars: string[]): Promise<void> {
-  for (let i = 0; i < chars.length; i++) await typeChar(d, lang, chars[i]!, chars[i - 1])
+  for (let i = 0; i < chars.length; i++) await typeChar(d, lang, chars[i]!, chars.slice(0, i).join(''))
 }
 
 /** Type the probe word and commit it the way the language does. Returns what was picked. */
@@ -473,6 +489,50 @@ const DRAG_CHARS = 3
 const DRAG_STEP_PX = 6
 const DRAG_MAX_PX = 600
 
+// Passing round 4 drags moved the caret only after about 100px, so the first stretch is covered fast, with
+// no page reads in between, to get past Gboard's drag threshold before its long-press timeout.
+const DRAG_FAST_STEPS = 4
+const DRAG_FAST_PX = 12
+
+/**
+ * One space bar drag with the finger held down: a fast start, then DRAG_STEP_PX steps with the caret read
+ * after each, until it moved DRAG_CHARS back or the selection left the editor.
+ */
+async function dragSpace(ctx: Ctx, space: GNode, start: number, initialSign: -1 | 1): Promise<{samples: DragSample[]; px: number}> {
+  let sign = initialSign
+  ctx.notes.drag_direction = sign < 0 ? 'left' : 'right'
+  const samples: DragSample[] = []
+  let px = 0
+  let reversed = false
+  await ctx.d.touch('down', space.x, space.y)
+  try {
+    for (let i = 0; i < DRAG_FAST_STEPS; i++) {
+      px += DRAG_FAST_PX
+      await ctx.d.touch('move', space.x + sign * px, space.y)
+    }
+    while (px < DRAG_MAX_PX) {
+      px += DRAG_STEP_PX
+      await ctx.d.touch('move', space.x + sign * px, space.y)
+      const sel = (await cdpEval(SELECTION_JS)) as Selection
+      if (!sel.inEditor || sel.focus === undefined) {
+        ctx.notes.selection_left_editor_at_px = px
+        break
+      }
+      samples.push({px, focus: sel.focus})
+      if (start - sel.focus >= DRAG_CHARS) break
+      // Moving forward means this build maps the drag the other way. Turn round once, from where we are.
+      if (sel.focus > start && !reversed) {
+        reversed = true
+        sign = -sign as -1 | 1
+        ctx.notes.drag_direction = `${ctx.notes.drag_direction} then reversed`
+      }
+    }
+  } finally {
+    await ctx.d.touch('up', space.x + sign * px, space.y)
+  }
+  return {samples, px}
+}
+
 const ACTIONS: Record<string, (ctx: Ctx) => Promise<void>> = {
   word,
 
@@ -519,35 +579,22 @@ const ACTIONS: Record<string, (ctx: Ctx) => Promise<void>> = {
     if (start === undefined || start < DRAG_CHARS) throw new Error(`caret at ${start}, too close to the start to move ${DRAG_CHARS}`)
     // Back through the text is left in ltr and right in rtl. Round 3 dragged Hebrew left, which moves the
     // caret towards the end it already sat at, so it never moved, and the selection then left the editor.
-    let sign = dragSign(ctx.steps.at(-1)!.text ?? '')
-    ctx.notes.drag_direction = sign < 0 ? 'left' : 'right'
-    const samples: DragSample[] = []
-    let px = 0
-    let reversed = false
-    await ctx.d.touch('down', space.x, space.y)
-    try {
-      // Gboard waits for a short move before it treats the touch as a cursor drag.
-      await sleep(0.1)
-      while (px < DRAG_MAX_PX) {
-        px += DRAG_STEP_PX
-        await ctx.d.touch('move', space.x + sign * px, space.y)
-        const sel = (await cdpEval(SELECTION_JS)) as Selection
-        if (!sel.inEditor || sel.focus === undefined) {
-          ctx.notes.selection_left_editor_at_px = px
-          break
-        }
-        samples.push({px, focus: sel.focus})
-        if (start - sel.focus >= DRAG_CHARS) break
-        // Moving forward means this build maps the drag the other way. Turn round once, from where we are.
-        if (sel.focus > start && !reversed) {
-          reversed = true
-          sign = -sign as -1 | 1
-          ctx.notes.drag_direction = `${ctx.notes.drag_direction} then reversed`
-        }
+    const first = dragSign(ctx.steps.at(-1)!.text ?? '')
+    let result = await dragSpace(ctx, space, start, first)
+    // Round 4: in 7 drags the touch sat still long enough to count as a long-press on Space, Gboard opened
+    // its language picker, and the caret never moved. Close it and drag once more.
+    if (languagePickerOpen(await ctx.d.dumpHierarchy())) {
+      ctx.notes.language_picker_opened = true
+      writeFile(`${ctx.base}-language-picker.xml`, await ctx.d.dumpHierarchy())
+      await adbOutput(['shell', 'input', 'keyevent', 'KEYCODE_BACK'])
+      await sleep(0.8)
+      result = await dragSpace(ctx, space, start, first)
+      if (languagePickerOpen(await ctx.d.dumpHierarchy())) {
+        await adbOutput(['shell', 'input', 'keyevent', 'KEYCODE_BACK'])
+        throw new Error('the space bar drag opened the language picker twice')
       }
-    } finally {
-      await ctx.d.touch('up', space.x + sign * px, space.y)
     }
+    const {samples, px} = result
     await sleep(0.5)
     const after = (await record(ctx, 'drag')).selection
     const k = charsPerPixel(start, samples)
@@ -573,12 +620,16 @@ const ACTIONS: Record<string, (ctx: Ctx) => Promise<void>> = {
 
   async 'long-press-word'(ctx) {
     await word(ctx)
-    const g = (await cdpEval(MIDDLE_GRAPHEME_JS)) as {rect: {left: number; right: number; top: number; bottom: number}; word: string; viewport: Viewport} | null
+    // Press the first grapheme. Round 4 pressed the middle one, which in short words (Für, 你好) is the last
+    // glyph, right beside the caret left after typing. Chrome took that as a press on the caret: it showed
+    // the insertion handle and its Select all / Read aloud menu, and selected nothing. Kyou passed because
+    // its middle glyph sits two away from the caret.
+    const g = (await cdpEval(FIRST_GRAPHEME_JS)) as {grapheme: string; rect: {left: number; right: number; top: number; bottom: number}; word: string; viewport: Viewport} | null
     if (!g) throw new Error('no text to long-press')
     const [x, y] = await toScreen(ctx.d, (g.rect.left + g.rect.right) / 2, (g.rect.top + g.rect.bottom) / 2, g.viewport)
     await ctx.d.longClick(x, y, 1.0)
     await sleep(1)
-    const s = await record(ctx, 'long-press', {screen: [x, y]})
+    const s = await record(ctx, 'long-press', {screen: [x, y], pressed: g.grapheme, rect: g.rect})
     await ctx.d.screenshot(`${ctx.base}-selected`)
     ctx.notes.selected = s.selection.selected ?? null
     ctx.notes.selected_word = (s.selection.selected ?? '').trim() === g.word.trim()
@@ -709,16 +760,16 @@ function withTimeout<T>(promise: Promise<T>, seconds: number): Promise<T> {
 
 export function probeLine(lang: string, r: ActionResult): string {
   const text = r.steps.at(-1)?.text ?? null
-  return `PROBE lang=${lang} layout=${r.layout} action=${r.action} status=${r.status} text=${pyRepr(text)} reason=${pyRepr(r.reason)}`
+  return `PROBE lang=${lang} page=${r.page ?? 'editor'} editor=${r.editor ?? 'none'} layout=${r.layout} action=${r.action} status=${r.status} text=${pyRepr(text)} reason=${pyRepr(r.reason)}`
 }
 
-async function runAction(d: Device, out: string, langCode: string, layout: string, action: string, cursorControl: boolean | undefined): Promise<ActionResult> {
+async function runAction(d: Device, out: string, langCode: string, page: {page: string; editor: string | null}, layout: string, action: string, cursorControl: boolean | undefined): Promise<ActionResult> {
   const lang = LANGS[layout]!
-  const base = `${out}/probe-${langCode}-${layout}-${action}`
+  const base = `${out}/probe-${langCode}-${page.page}-${layout}-${action}`
   const ctx: Ctx = {d, out, lang, steps: [], notes: {}, base, cursorControl}
   let status: Status = 'ok'
   let reason = ''
-  phase(`action ${layout}/${action}`)
+  phase(`action ${page.page} ${layout}/${action}`)
   deadline = Date.now() + ACTION_TIMEOUT * 1000
   try {
     await withTimeout(
@@ -743,7 +794,7 @@ async function runAction(d: Device, out: string, langCode: string, layout: strin
   try {
     await d.screenshot(base)
   } catch {}
-  const result: ActionResult = {action, layout, status, reason, evidence: evidence(ctx.steps), steps: ctx.steps, ...ctx.notes}
+  const result: ActionResult = {...page, action, layout, status, reason, evidence: {...page, ...evidence(ctx.steps)}, steps: ctx.steps, ...ctx.notes}
   console.log(probeLine(langCode, result))
   return result
 }
@@ -761,22 +812,30 @@ async function main(): Promise<void> {
     if (hash) subtypeHashes[code] = hash
   }
 
+  const pages = parsePages(process.env.PROBE_PAGES)
+  // The build writes the editor version next to the pages. Plain has no editor.
+  const versions = (await fetch(`http://localhost:${PORT}/versions.json`).then((r) => r.json()).catch(() => ({}))) as {editor?: string}
+
   await adb(['reverse', `tcp:${PORT}`, `tcp:${PORT}`])
   const d = await Device.connect()
   d.waitTimeout = 10
-  setCurrentUrl(URL_)
-  await launchChrome(d)
-  phase(`page loaded, cursor control ${cursorControl}, layouts ${layouts.join(' ')}, subtypes ${pyRepr(subtypeHashes)}`)
-
   const results: ActionResult[] = []
-  for (const layout of layouts) {
-    for (const action of Object.keys(ACTIONS)) {
-      results.push(await runAction(d, out, langCode, layout, action, cursorControl))
-      writeFile(`${out}/probe-${langCode}.json`, JSON.stringify({lang: langCode, gboard: GBOARD, cursorControl, origin, originSource, subtypeHashes, results}, null, 2))
+  for (const name of pages) {
+    URL_ = pageUrl(name, PORT)
+    setCurrentUrl(URL_)
+    // A fresh Chrome per page, so nothing from the previous page carries over.
+    await launchChrome(d, results.length > 0)
+    const page = pageInfo(name, versions)
+    phase(`page ${name} loaded (editor ${page.editor}), cursor control ${cursorControl}, layouts ${layouts.join(' ')}, subtypes ${pyRepr(subtypeHashes)}`)
+    for (const layout of layouts) {
+      for (const action of Object.keys(ACTIONS)) {
+        results.push(await runAction(d, out, langCode, page, layout, action, cursorControl))
+        writeFile(`${out}/probe-${langCode}.json`, JSON.stringify({lang: langCode, gboard: GBOARD, pages, versions, cursorControl, origin, originSource, subtypeHashes, results}, null, 2))
+      }
     }
   }
   const counts = results.reduce<Record<string, number>>((c, r) => ({...c, [r.status]: (c[r.status] ?? 0) + 1}), {})
-  console.log(`PROBE_SUMMARY lang=${langCode} ${Object.entries(counts).map(([k, v]) => `${k}=${v}`).join(' ')}`)
+  console.log(`PROBE_SUMMARY lang=${langCode} pages=${pages.join(',')} editor=${versions.editor ?? 'unknown'} ${Object.entries(counts).map(([k, v]) => `${k}=${v}`).join(' ')}`)
 }
 
 if (import.meta.main) {

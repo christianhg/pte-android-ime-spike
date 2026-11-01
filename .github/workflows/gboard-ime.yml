@@ -10,6 +10,9 @@ on:
       langs:
         description: Languages for the keyboard action probe, space-separated. Each runs as its own job, twice.
         default: 'ko zh hi ar he th vi de en'
+      pages:
+        description: Pages for the probe, space-separated. editor is the Portable Text Editor page, plain a bare contenteditable control. Each job runs every page.
+        default: 'editor plain'
 
 jobs:
   emulator:
@@ -18,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # baseline = published @portabletext/editor 8.2.4, the others are packed tarballs in page/tarballs.
+        # baseline = the published @portabletext/editor in page/package.json (8.2.10), the others are packed tarballs in page/tarballs.
         variant: [baseline]
         lang: [ja, en]
         api: [36]
@@ -160,7 +163,9 @@ jobs:
 
       - name: Build test page
         working-directory: page
-        run: npm install --no-audit --no-fund --no-package-lock && npm run build
+        run: |
+          npm install --no-audit --no-fund --no-package-lock && npm run build
+          cat dist/versions.json
 
       - name: Install the driver and fetch the uiautomator2 server jar
         run: |
@@ -176,6 +181,7 @@ jobs:
         timeout-minutes: 50
         env:
           PROBE_LANG: ${{ matrix.lang }}
+          PROBE_PAGES: ${{ inputs.pages }}
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36

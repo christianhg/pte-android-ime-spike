@@ -105,3 +105,30 @@ export function textDirection(text: string): 'ltr' | 'rtl' {
 export function dragSign(text: string): -1 | 1 {
   return textDirection(text) === 'rtl' ? 1 : -1
 }
+
+/**
+ * Pages the probe can type into. `editor` is the Portable Text Editor, `plain` a bare contenteditable with
+ * the same event log, the control: what happens on both is Gboard and Chrome, what happens only on the
+ * editor page is the editor.
+ */
+export const PAGES: Record<string, {file: string; editor: boolean}> = {
+  editor: {file: 'editor.html', editor: true},
+  plain: {file: 'plain.html', editor: false},
+}
+
+/** Page names from a space-separated list such as the workflow's `pages` input, in order, unknown ones refused. */
+export function parsePages(list: string | undefined): string[] {
+  const names = (list ?? '').split(/\s+/).filter(Boolean)
+  if (!names.length) return ['editor', 'plain']
+  for (const n of names) if (!PAGES[n]) throw new Error(`unknown page ${n}, expected one of ${Object.keys(PAGES).join(' ')}`)
+  return [...new Set(names)]
+}
+
+export function pageUrl(page: string, port: number): string {
+  return `http://localhost:${port}/${PAGES[page]!.file}?prefix=`
+}
+
+/** What a PROBE line and an evidence object say about the page: its name and the editor version, if any. */
+export function pageInfo(page: string, versions: {editor?: string}): {page: string; editor: string | null} {
+  return {page, editor: PAGES[page]!.editor ? (versions.editor ?? 'unknown') : null}
+}

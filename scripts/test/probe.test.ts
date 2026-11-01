@@ -3,10 +3,10 @@
 // built inline from the node shape uiautomator writes.
 
 import assert from 'node:assert/strict'
-import {readFileSync} from 'node:fs'
+import {existsSync, readFileSync} from 'node:fs'
 import {test} from 'node:test'
 import {probeLine} from '../probe.ts'
-import {charsPerPixel, chromePid, cursorControlFromLog, dragDistance, dragSign, evidence, hasWord, textDirection, type Step} from '../lib/probe-logic.ts'
+import {charsPerPixel, chromePid, cursorControlFromLog, dragDistance, dragSign, evidence, hasWord, pageInfo, pageUrl, PAGES, parsePages, textDirection, type Step} from '../lib/probe-logic.ts'
 import {
   charKey,
   classifyLayout,
@@ -29,6 +29,10 @@ import {
   currentInputType,
   isUrlField,
   pickRow,
+  languagePickerOpen,
+  keyboardTop,
+  reachableRows,
+  searchQuery,
   emojiPanelOpen,
   keyText,
   scrollBand,
@@ -328,8 +332,12 @@ test('probe log helpers', () => {
   assert.ok(hasWord('Kyou ', 'kyou'), 'Gboard capitalises the first word')
   assert.ok(hasWord('tiếng', 'tiếng'), 'decomposed Vietnamese counts')
   assert.equal(
-    probeLine('ko', {action: 'word', layout: 'ko', status: 'ok', reason: '', steps: [{step: 'space', text: '한국\xa0', dom: null, selection: {inEditor: true}, events: []}]}),
-    "PROBE lang=ko layout=ko action=word status=ok text='한국\\xa0' reason=''",
+    probeLine('ko', {page: 'editor', editor: '8.2.10', action: 'word', layout: 'ko', status: 'ok', reason: '', steps: [{step: 'space', text: '한국\xa0', dom: null, selection: {inEditor: true}, events: []}]}),
+    "PROBE lang=ko page=editor editor=8.2.10 layout=ko action=word status=ok text='한국\\xa0' reason=''",
+  )
+  assert.equal(
+    probeLine('ko', {page: 'plain', editor: null, action: 'word', layout: 'ko', status: 'failed', reason: 'x', steps: []}),
+    "PROBE lang=ko page=plain editor=none layout=ko action=word status=failed text=None reason='x'",
   )
 })
 
@@ -339,7 +347,7 @@ const word = (lang: string, dumpName: string, prevDump?: Record<number, string>)
   const keys = LANGS[lang]!.keys
   return keys.map((ch, i) => {
     const pool = prevDump?.[i] ? nodes(prevDump[i]!) : k
-    return charKey(pool, ch, keys[i - 1])?.id
+    return charKey(pool, ch, keys.slice(0, i).join(''))?.id
   })
 }
 
@@ -355,10 +363,13 @@ test('Thai: combining marks are keys labelled with a leading space', () => {
   assert.equal(keyText(' ั'), 'ั')
 })
 
-test('Hindi: after a consonant the mark keys preview it joined (स् + ZWJ), and still match the mark', () => {
+test('Hindi: after a consonant or conjunct the mark keys preview it joined, and still match the mark', () => {
   // Round 3 failed on the virama right after स. On the dump taken there, the key reads स्‍.
   assert.equal(charKey(nodes('r3-hi-after-sa.xml'), '्', 'स')?.id, 'key_pos_4_8')
   assert.equal(charKey(nodes('r3-hi-after-sa.xml'), 'े', 'स')?.id, 'key_pos_0_6')
+  // Round 4 stopped at the e-matra after the conjunct स्त, where the key reads स्ते.
+  assert.equal(charKey(nodes('r4-hi-after-sta.xml'), 'े', 'नमस्त')?.id, 'key_pos_0_6')
+  assert.equal(charKey(nodes('r4-hi-after-sta.xml'), 'त', 'नमस्')?.id, 'key_pos_2_5', 'a consonant is still its plain key')
   // On the base page the virama has its own key and the consonants are plain.
   assert.equal(charKey(nodes('r3-hi-keyboard.xml'), '्')?.id, 'key_pos_4_8')
   assert.equal(charKey(nodes('r3-hi-keyboard.xml'), 'न')?.id, 'key_pos_2_9')
@@ -412,4 +423,40 @@ test('space drag goes right to move back through rtl text', () => {
   assert.equal(textDirection(''), 'ltr')
   assert.equal(dragSign('שלום '), 1)
   assert.equal(dragSign('Kyou '), -1)
+})
+
+test('setup only taps rows above the search keyboard, and knows a search screen from a variant page', () => {
+  const xml = readFileSync(new URL('fixtures/r3-ar-search-keyboard.xml', import.meta.url), 'utf8')
+  const top = keyboardTop(xml)!
+  assert.ok(top > 1000)
+  const rows = reachableRows(xml)
+  assert.ok(rows.length > 0 && rows.every((r) => r.y < top))
+  const all = parseXml(xml).filter((n) => n.attrs['resource-id'] === 'android:id/title')
+  assert.ok(all.length > rows.length, 'rows under the keyboard are left out')
+  // Round 4: the search field after a tap landed on the keyboard.
+  assert.equal(searchQuery(fixture('r4-ar-stray-query.xml')), 'Arabic word ', 'a committed suggestion, trailing space and all')
+  assert.equal(searchQuery(fixture('r1-vi-search.xml')), 'Vietnamese')
+  assert.equal(searchQuery(fixture('r1-ar-variants.xml')), undefined, 'a variant page has no search field')
+  assert.equal(searchQuery(fixture('r1-hi-variants.xml')), undefined)
+  assert.equal(keyboardTop(fixture('r1-ar-variants.xml')), undefined)
+})
+
+test('a space drag that sat still opened the language picker, in any UI language', () => {
+  // Round 4 th-1: the picker titled เปลี่ยนแป้นพิมพ์ over the keyboard, after a drag that moved 0.
+  assert.ok(languagePickerOpen(fixture('r4-th-language-picker.xml')))
+  assert.ok(!languagePickerOpen(fixture('r3-th-keyboard.xml')))
+  assert.ok(!languagePickerOpen(fixture('en-keyboard.xml')))
+})
+
+test('pages: the editor page and the plain control, with the editor version only where there is an editor', () => {
+  assert.deepEqual(parsePages(undefined), ['editor', 'plain'])
+  assert.deepEqual(parsePages(''), ['editor', 'plain'])
+  assert.deepEqual(parsePages(' plain  editor plain '), ['plain', 'editor'])
+  assert.throws(() => parsePages('editor lexical'), /unknown page lexical/)
+  assert.equal(pageUrl('plain', 8765), 'http://localhost:8765/plain.html?prefix=')
+  assert.deepEqual(pageInfo('editor', {editor: '8.2.10'}), {page: 'editor', editor: '8.2.10'})
+  assert.deepEqual(pageInfo('editor', {}), {page: 'editor', editor: 'unknown'})
+  assert.deepEqual(pageInfo('plain', {editor: '8.2.10'}), {page: 'plain', editor: null})
+  // Both pages exist in the page build, which copies src/*.html.
+  for (const {file} of Object.values(PAGES)) assert.ok(existsSync(new URL(`../../page/src/${file}`, import.meta.url)), file)
 })

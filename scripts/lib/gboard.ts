@@ -148,13 +148,17 @@ export function keyText(label: string): string {
 const COMBINING = /^\p{M}+$/u
 
 /**
- * The key that types `ch`. Latin keys may be either case. After a consonant, Gboard's Hindi keys preview
- * each mark joined to it (round 3: after स, the virama key reads "स्" + ZWJ and the e-matra key "से"), so a
- * combining mark also matches `prev` + mark.
+ * The key that types `ch`. Latin keys may be either case. Gboard's Hindi keys preview a mark joined to the
+ * syllable before it: after स the virama key reads "स्" + ZWJ (round 3), and after the conjunct स्त the
+ * e-matra key reads "स्ते" (round 4). So a combining mark also matches any short tail of `typed`, the text
+ * typed so far, followed by the mark.
  */
-export function charKey(nodes: GNode[], ch: string, prev?: string): GNode | undefined {
+export function charKey(nodes: GNode[], ch: string, typed = ''): GNode | undefined {
   const wanted = new Set([ch, ch.toUpperCase(), ch.toLowerCase()].map((c) => c.normalize('NFC')))
-  if (prev && COMBINING.test(ch)) wanted.add((prev + ch).normalize('NFC'))
+  if (COMBINING.test(ch)) {
+    const tail = [...typed]
+    for (let n = 1; n <= Math.min(4, tail.length); n++) wanted.add((tail.slice(-n).join('') + ch).normalize('NFC'))
+  }
   // Keys first: once typing starts, the suggestion strip above them can hold the same character.
   const isKey = (n: GNode) => n.id.startsWith('key_pos_') && !n.id.startsWith('key_pos_header')
   for (const pool of [nodes.filter(isKey), nodes]) {
@@ -420,10 +424,52 @@ export function isUrlField(inputType: number | undefined): boolean {
  * the screen when it is hidden) up to 30% of the way down from the list's top, in screen pixels.
  */
 export function scrollBand(xml: string, screenHeight: number): {top: number; bottom: number} {
-  const nodes = parseXml(xml)
-  const keyboardTop = Math.min(...nodes.filter((n) => n.attrs.package === GBOARD && /key_pos_/.test(n.attrs['resource-id'] ?? '')).map((n) => parseBounds(n.attrs.bounds!).top))
-  const list = nodes.find((n) => n.attrs.scrollable === 'true' && n.attrs['resource-id'] !== '')
+  const list = parseXml(xml).find((n) => n.attrs.scrollable === 'true' && n.attrs['resource-id'] !== '')
   const listTop = list ? parseBounds(list.attrs.bounds!).top : screenHeight * 0.15
-  const bottom = Number.isFinite(keyboardTop) ? keyboardTop - 60 : screenHeight * 0.85
+  const top = keyboardTop(xml)
+  const bottom = top !== undefined ? top - 60 : screenHeight * 0.85
   return {top: Math.round(listTop + (bottom - listTop) * 0.3), bottom: Math.round(bottom)}
+}
+
+/** The top of Gboard's keys on screen, or undefined when the keyboard is hidden. */
+export function keyboardTop(xml: string): number | undefined {
+  const tops = parseXml(xml)
+    .filter((n) => n.attrs.package === GBOARD && /key_pos_/.test(n.attrs['resource-id'] ?? ''))
+    .map((n) => parseBounds(n.attrs.bounds!).top)
+  return tops.length ? Math.min(...tops) : undefined
+}
+
+/**
+ * Language list rows a tap can reach: the android:id/title rows whose centre sits above the keyboard.
+ * Round 4 scrolled the Arabic row into view under the search keyboard, tapped it, hit Gboard instead, and
+ * the query became "Arabic word".
+ */
+export function reachableRows(xml: string): Array<{text: string; x: number; y: number}> {
+  const top = keyboardTop(xml) ?? Infinity
+  return parseXml(xml)
+    .filter((n) => n.attrs['resource-id'] === 'android:id/title' && n.attrs.text)
+    .map((n) => {
+      const [x, y] = center(parseBounds(n.attrs.bounds!))
+      return {text: n.attrs.text!, x, y}
+    })
+    .filter((r) => r.y < top - 20)
+}
+
+/**
+ * The language search field's text, or undefined when the screen has none. The search screens have one
+ * (search_src_text or an EditText), a language's variant page does not.
+ */
+export function searchQuery(xml: string): string | undefined {
+  const field = parseXml(xml).find((n) => n.attrs['resource-id'] === `${GBOARD}:id/search_src_text` || (n.attrs.class === 'android.widget.EditText' && n.attrs.package === GBOARD))
+  return field ? (field.attrs.text ?? '') : undefined
+}
+
+/**
+ * Whether Gboard's language picker (Change keyboard, เปลี่ยนแป้นพิมพ์, ...) is open. A touch on Space that does
+ * not move before the long-press timeout opens it, and a space bar drag then never starts (round 4: all 7
+ * drags that moved 0). The picker lists the enabled keyboards, English (US) among them in every probe job,
+ * as plain text nodes, which keys never are.
+ */
+export function languagePickerOpen(xml: string): boolean {
+  return parseXml(xml).some((n) => n.attrs.package === GBOARD && n.attrs.text === 'English (US)')
 }

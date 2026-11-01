@@ -7,7 +7,7 @@
 
 import {writeFileSync} from 'node:fs'
 import {adbOutput, adbPassthrough} from './lib/adb.ts'
-import {downloadStates, enabledLocales, scrollBand, enabledSubtypes, GBOARD, LANGS, LATIN_IME, layoutTiles, localeMatches, pickRow, subtypesLine, type Lang} from './lib/gboard.ts'
+import {downloadStates, enabledLocales, reachableRows, scrollBand, searchQuery, enabledSubtypes, GBOARD, LANGS, LATIN_IME, layoutTiles, localeMatches, pickRow, subtypesLine, type Lang} from './lib/gboard.ts'
 import {center, parseBounds, parseXml, switchRow} from './lib/hierarchy.ts'
 import {Device, type UiObject} from './lib/u2.ts'
 import {safePath, sleep} from './lib/util.ts'
@@ -82,14 +82,8 @@ async function languageSearch(d: Device): Promise<UiObject> {
 }
 
 /** Result rows in a dump: the android:id/title texts, which the search field does not have. */
-function titles(xml: string): Array<{text: string; x: number; y: number}> {
-  return parseXml(xml)
-    .filter((n) => n.attrs['resource-id'] === 'android:id/title' && n.attrs.text)
-    .map((n) => {
-      const [x, y] = center(parseBounds(n.attrs.bounds!))
-      return {text: n.attrs.text!, x, y}
-    })
-}
+// Only rows above the keyboard: a row under it cannot be tapped without hitting Gboard.
+const titles = reachableRows
 
 /**
  * Scroll the language list one page. Round 3 scrolled with the search keyboard up: the swipe crossed Gboard,
@@ -105,6 +99,25 @@ async function scrollList(d: Device, xml: string): Promise<void> {
 }
 
 /**
+ * Clear the search field and type `query`, then check the field holds exactly that. Round 4 ended with
+ * "Arabic word" in the field after a tap landed on the keyboard, and the search found nothing.
+ */
+async function typeQuery(d: Device, search: UiObject, query: string): Promise<string> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await search.click()
+    await adbPassthrough(['shell', 'input', 'keyevent', 'KEYCODE_MOVE_END'])
+    await adbPassthrough(['shell', 'input', 'keyevent', ...Array<string>(40).fill('KEYCODE_DEL')])
+    await adbPassthrough(['shell', 'input', 'text', query])
+    await sleep(2)
+    const xml = await snap(d, 'search-typed')
+    const now = searchQuery(xml)
+    if (now === query || now === undefined) return xml
+    log(`search field reads ${JSON.stringify(now)}, retyping`)
+  }
+  throw new Error(`could not get ${JSON.stringify(query)} into the language search`)
+}
+
+/**
  * Find a row matching `lang.rows` in the list on screen, scrolling the list (never pressing Back, which
  * closes the search on Gboard v15 and drops back to the unfiltered list, as run 1 did for ar and vi).
  */
@@ -116,6 +129,7 @@ async function findRow(d: Device, lang: Lang, xml: string, name: string): Promis
     const before = JSON.stringify(titles(xml).map((t) => t.text))
     await scrollList(d, xml)
     xml = await d.dumpHierarchy()
+    writeFile(`${out}/${code}-setup-${name}-scroll-${String(i + 1).padStart(2, '0')}.xml`, xml)
     // The end of the list: a scroll that changes nothing.
     if (JSON.stringify(titles(xml).map((t) => t.text)) === before) break
   }
@@ -128,10 +142,7 @@ async function addLanguage(d: Device, lang: Lang): Promise<void> {
   await tapText(d, '^Languages$', 'languages')
   await tapText(d, '^Add keyboard$', 'add-keyboard')
   const search = await languageSearch(d)
-  await search.click()
-  await adbPassthrough(['shell', 'input', 'text', lang.search])
-  await sleep(2)
-  let xml = await snap(d, 'search-typed')
+  let xml = await typeQuery(d, search, lang.search)
   log(`rows ${JSON.stringify(titles(xml).map((t) => t.text).slice(0, 20))}`)
   let row = await findRow(d, lang, xml, 'search')
   // A language with regional or script variants opens a list of them instead of its layout page. Tap the
@@ -142,6 +153,13 @@ async function addLanguage(d: Device, lang: Lang): Promise<void> {
     await sleep(2)
     xml = await snap(d, level ? `variant-${level}` : 'language')
     if (layoutTiles(xml).length) break
+    // Still on the search screen: the tap missed the row, so find it again rather than go a level down.
+    if (searchQuery(xml) !== undefined) {
+      log(`tap missed ${JSON.stringify(row.text)}, query ${JSON.stringify(searchQuery(xml))}`)
+      if (searchQuery(xml) !== lang.search) xml = await typeQuery(d, search, lang.search)
+      row = await findRow(d, lang, xml, 'search')
+      continue
+    }
     if (!titles(xml).length) throw new Error(`neither layout tiles nor variant rows after tapping ${JSON.stringify(row.text)}`)
     log(`variants ${JSON.stringify(titles(xml).map((t) => t.text).slice(0, 20))}`)
     row = await findRow(d, lang, xml, 'variants')
