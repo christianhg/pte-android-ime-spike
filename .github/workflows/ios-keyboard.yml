@@ -4,6 +4,19 @@ on:
   push:
     branches: [ios-keyboard-spike]
   workflow_dispatch:
+    inputs:
+      langs:
+        description: JSON list of languages
+        default: '["en", "ja"]'
+      attempts:
+        description: JSON list of attempt numbers
+        default: '[1, 2, 3, 4, 5]'
+      cases_en:
+        description: English cases
+        default: kyou autocorrect edit actions interrupt
+      cases_ja:
+        description: Japanese cases
+        default: kyou interrupt
 
 jobs:
   simulator:
@@ -13,8 +26,8 @@ jobs:
       fail-fast: false
       matrix:
         runner: [macos-15]
-        lang: [en, ja]
-        attempt: [1, 2, 3, 4, 5]
+        lang: ${{ fromJSON(inputs.langs || '["en", "ja"]') }}
+        attempt: ${{ fromJSON(inputs.attempts || '[1, 2, 3, 4, 5]') }}
     steps:
       - uses: actions/checkout@v4
 
@@ -58,6 +71,8 @@ jobs:
         working-directory: ios
         env:
           LANG_CASE: ${{ matrix.lang }}
+          CASES_EN: ${{ inputs.cases_en }}
+          CASES_JA: ${{ inputs.cases_ja }}
         run: |
           node ../scripts/serve.ts ../page/dist 8765 > ../out/http.log 2>&1 &
           npx appium --log ../out/appium.log --log-level info > /dev/null 2>&1 &

@@ -118,10 +118,22 @@ try {
     await keyboard.waitForExist({timeout: 15_000})
   } catch {
     phase('no keyboard after web tap, tapping the text view natively')
-    await browser.$('//XCUIElementTypeWebView//XCUIElementTypeTextView').click()
+    await browser.$('(//XCUIElementTypeWebView//XCUIElementTypeTextView)[1]').click()
     await keyboard.waitForExist({timeout: 15_000})
   }
   phase('keyboard shown')
+  // Put the caret at the end of the field, as the Android driver does, so a tap that lands before
+  // existing text doesn't decide where typing goes.
+  await web()
+  await browser.execute(() => {
+    const field = document.querySelector('[contenteditable="true"]')!
+    const range = document.createRange()
+    range.selectNodeContents(field)
+    range.collapse(false)
+    const selection = getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+  })
   let keys = await keyNames()
   result.initialKeys = keys
   if (lang === 'ja') {
@@ -196,7 +208,7 @@ try {
       return {x: r.left + r.width / 2, y: r.top + r.height / 2, vv: visualViewport?.offsetTop ?? 0}
     })) as {x: number; y: number; vv: number} | null
     await native()
-    const webView = browser.$('//XCUIElementTypeWebView')
+    const webView = browser.$('(//XCUIElementTypeWebView)[1]')
     const wv = await browser.getElementRect(await webView.elementId)
     if (box) {
       await browser.execute('mobile: doubleTap', {x: wv.x + box.x, y: wv.y + box.y})
