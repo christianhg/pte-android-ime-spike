@@ -102,10 +102,10 @@ let failed = false
 try {
   await web()
   await browser.url(`http://localhost:8765/${page}${page.includes("?") ? "&" : "?"}prefix=${encodeURIComponent(prefix)}`)
-  await browser.$('[contenteditable]').waitForExist({timeout: 20_000})
+  await browser.$('[contenteditable="true"]').waitForExist({timeout: 20_000})
   phase('page loaded')
   // nativeWebTap turns this click into a real tap, which raises the software keyboard.
-  await browser.$('[contenteditable]').click()
+  await browser.$('[contenteditable="true"]').click()
   await native()
   const keyboard = browser.$('//XCUIElementTypeKeyboard')
   try {
@@ -119,15 +119,20 @@ try {
   let keys = await keyNames()
   result.initialKeys = keys
   if (lang === 'ja') {
-    // Japanese Romaji is the only installed keyboard. Its delete key is labelled 削除, which tells it
-    // apart from the English layout.
-    await native()
-    const deleteLabel = await browser
-      .$('-ios predicate string:type == "XCUIElementTypeKey" AND name == "delete"')
-      .getAttribute('label')
-    result.deleteLabel = deleteLabel
-    phase(`keyboard delete label ${JSON.stringify(deleteLabel)}`)
-    if (deleteLabel !== '削除') throw new Error(`not the Japanese keyboard, delete is ${deleteLabel}`)
+    // The simulator opens on English even when Japanese is listed first. Tap the globe ("Next
+    // keyboard", a button under the keys) until the delete key is labelled 削除.
+    const deleteLabel = async () => {
+      await native()
+      return browser.$('-ios predicate string:type == "XCUIElementTypeKey" AND name == "delete"').getAttribute('label')
+    }
+    let label = await deleteLabel()
+    for (let i = 0; i < 3 && label !== '削除'; i++) {
+      await tap('Next keyboard')
+      label = await deleteLabel()
+    }
+    result.deleteLabel = label
+    phase(`keyboard delete label ${JSON.stringify(label)}`)
+    if (label !== '削除') throw new Error(`not the Japanese keyboard, delete is ${label}`)
   }
   // The keyboard drops taps that land before it has settled.
   await browser.pause(1500)

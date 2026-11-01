@@ -16,7 +16,7 @@ xcrun simctl boot "$udid"
 xcrun simctl bootstatus "$udid" -b > /dev/null
 sp() { xcrun simctl spawn "$udid" "$@"; }
 if [ "$lang" = ja ]; then
-  sp defaults write -g AppleKeyboards -array 'ja_JP-Romaji@sw=QWERTY-Japanese;hw=Automatic'
+  sp defaults write -g AppleKeyboards -array 'ja_JP-Romaji@sw=QWERTY-Japanese;hw=Automatic' 'en_US@sw=QWERTY;hw=Automatic'
 else
   sp defaults write -g AppleKeyboards -array 'en_US@sw=QWERTY;hw=Automatic'
 fi
