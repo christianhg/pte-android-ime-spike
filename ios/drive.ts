@@ -1,7 +1,10 @@
 // Type on the iOS Simulator's software keyboard in Mobile Safari by tapping its keys natively, then
 // read what the page ended up with.
 // Usage: node ios/drive.ts <page> <prefix> <en|ja> <out> <case>
-// Cases: kyou (two words, space or 今日 candidate), autocorrect (teh + space), edit (ab, delete, return, c)
+// Cases: kyou (two words, space or 今日 candidate, then on English return and a third word), autocorrect
+// (teh + space), edit (ab, delete, return, c), warmup (focus and raise the keyboard only, no result).
+// Every case records the page's layout (window.__layout) before typing and after the first letter, and
+// the page errors (window.__errors).
 import {mkdirSync, writeFileSync} from 'node:fs'
 import {remote} from 'webdriverio'
 
@@ -80,10 +83,27 @@ async function state() {
   await web()
   return (await browser.execute(() => (window as any).__state())) as {text: string; events: unknown[]}
 }
+async function layout() {
+  await web()
+  return await browser.execute(() => (window as any).__layout())
+}
+async function errors() {
+  await web()
+  return await browser.execute(() => (window as any).__errors)
+}
+/** Called once, after the first letter of the case has landed. */
+let afterFirstLetter: (() => Promise<void>) | undefined
+async function firstLetterDone() {
+  const hook = afterFirstLetter
+  afterFirstLetter = undefined
+  if (hook) await hook()
+}
 async function typeLetters(word: string) {
   // Only English: a composing Japanese field may not report the text until conversion.
   if (lang === 'ja') {
-    for (const letter of word) await tap(letter)
+    await tap(word[0]!)
+    await firstLetterDone()
+    for (const letter of word.slice(1)) await tap(letter)
     return
   }
   const before = (await state()).text.length
@@ -99,9 +119,11 @@ async function typeLetters(word: string) {
     phase(`DROPPED first tap of ${word}, tapping again`)
     await tap(word[0]!)
   }
+  await firstLetterDone()
   for (const letter of word.slice(1)) await tap(letter)
 }
 
+class Warmup extends Error {}
 const result: Record<string, unknown> = {tag, page, prefix, lang, caseName}
 const steps: Array<Record<string, unknown>> = []
 let failed = false
@@ -155,6 +177,15 @@ try {
   // The keyboard drops taps that land before it has settled.
   await browser.pause(1500)
   await snapshot('keyboard')
+  if (caseName === 'warmup') throw new Warmup()
+  // The focused empty field, before any key: rects of the line, placeholder and caret, the render branch.
+  result.layoutBefore = await layout()
+  await snapshot('empty-focused')
+  afterFirstLetter = async () => {
+    await browser.pause(300)
+    result.layoutAfterFirst = await layout()
+    await snapshot('first-letter')
+  }
 
   if (caseName === 'kyou') {
     for (const i of [1, 2]) {
@@ -173,6 +204,19 @@ try {
         await tap('space')
       }
       steps.push({after: `word ${i}`, text: (await state()).text})
+    }
+    if (lang === 'en') {
+      // A new empty block made by return: does its first word capitalise?
+      await tap('Return')
+      await browser.pause(500)
+      result.layoutAfterReturn = await layout()
+      await snapshot('after-return')
+      await typeLetters('kyou')
+      await tap('space')
+      const text = (await state()).text
+      const lines = text.split('\n')
+      steps.push({after: 'return word 3', text})
+      result.afterReturn = {text, newBlock: lines.length > 1 ? lines[lines.length - 1] : null}
     }
   } else if (caseName === 'autocorrect') {
     await typeLetters('teh')
@@ -316,18 +360,34 @@ try {
   }
   const final = await state()
   result.text = final.text
+  result.firstLetterCapital = /^[A-Z]/.test(final.text ?? '')
   result.events = final.events
   result.steps = steps
+  result.errors = await errors()
   await snapshot('final')
-  phase(`RESULT ${JSON.stringify(final.text)}`)
+  phase(`RESULT ${JSON.stringify(final.text)} errors=${(result.errors as unknown[]).length}`)
 } catch (error) {
-  failed = true
-  result.error = String(error)
-  result.steps = steps
-  phase(`ERROR ${String(error).split('\n')[0]}`)
-  try {
-    await snapshot('error')
-  } catch {}
+  if (error instanceof Warmup) {
+    result.warmup = 'keyboard shown'
+    phase('WARMUP keyboard shown')
+  } else {
+    failed = true
+    // What the page had when the case broke, as far as the page still answers.
+    try {
+      const s = await state()
+      result.text = s.text
+      result.events = s.events
+      result.errors = await errors()
+    } catch (e) {
+      result.stateError = String(e).split('\n')[0]
+    }
+    result.error = String(error)
+    result.steps = steps
+    phase(`ERROR ${String(error).split('\n')[0]}`)
+    try {
+      await snapshot('error')
+    } catch {}
+  }
 } finally {
   result.seconds = (Date.now() - t0) / 1000
   writeFileSync(`${out}/${tag}.json`, JSON.stringify(result, null, 2))

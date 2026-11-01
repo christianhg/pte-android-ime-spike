@@ -1,6 +1,7 @@
 <!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>plain</title>
+<script src="./probe.js"></script>
 <div id="ed" contenteditable="true" style="border:1px solid #888;min-height:3em;font-size:20px"></div>
 <button id="outside" style="font-size:20px;margin:16px 0">Outside</button>
 <pre id="log" style="font-size:10px"></pre>
@@ -13,6 +14,6 @@
       document.getElementById('log').textContent = events.map((x) => JSON.stringify(x)).join('\n')
     })
   }
-  window.__state = () => ({text: ed.textContent, events})
+  window.__state = () => ({text: ed.innerText, events})
   ed.focus()
 </script>

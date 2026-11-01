@@ -20,6 +20,12 @@ for i in $(seq 1 48); do
   sleep 5
 done
 log "settle done after $((i * 5))s quiet=$quiet"
+# Stop the Play Store before its auto-update job runs. It updates Google Play services a few minutes after
+# boot, and the new container makes Play services restart every process with a Dynamite module loaded,
+# Chrome included, which kills Chrome mid-case (probe/languages-actions 4bcf428).
+a shell am force-stop com.android.vending
+log "play store disable: $(timeout 30 adb shell pm disable-user --user 0 com.android.vending 2>&1 | tr '\n' ' ')"
+log "play store disabled=$(timeout 30 adb shell pm list packages -d 2>/dev/null | tr -d '\r' | grep -c '^package:com.android.vending$')"
 log "diagnose start"
 timeout 120 scripts/diagnose.sh "$out" || log "diagnose rc=$?"
 
@@ -41,7 +47,7 @@ fi
 
 log "logcat"
 a logcat -c
-(timeout 900 adb logcat -v time > "$out/logcat.txt" 2>&1 &)
+(timeout 3600 adb logcat -v time > "$out/logcat.txt" 2>&1 &)
 
 log "http server"
 node scripts/serve.ts page/dist 8765 < /dev/null > "$out/http.log" 2>&1 &
@@ -53,8 +59,11 @@ a reverse tcp:8765 tcp:8765
 a reverse --list
 
 status=0
-for args in "plain.html ''" "editor.html ''" "editor.html x"; do
-  eval "set -- $args"
+pages="plain.html plain-zw.html"
+for v in main placeholder zw both; do pages="$pages $v/editor.html $v/editor.html?placeholder=Write"; done
+for page in $pages; do
+  set -- "$page" ''
+  tag=$(echo "${1%.html}" | sed 's/\.html?placeholder=Write/-ph/; s/[^a-zA-Z0-9-]/-/g')-empty
   log "case $1 prefix='$2' start"
   timeout -k 10 180 node scripts/drive.ts "$1" "$2" "$out" 2>&1 | tee -a "$out/drive.log"
   rc=${PIPESTATUS[0]}
@@ -62,6 +71,8 @@ for args in "plain.html ''" "editor.html ''" "editor.html x"; do
   if [ "$rc" -ne 0 ]; then
     # Retry once from a fresh Chrome. The retry is logged, so the flake rate counts first attempts too.
     log "RETRY case $1 prefix='$2'"
+    # Keep the failed attempt's record: it is an infra failure, listed apart from the results.
+    [ -f "$out/$tag.json" ] && mv "$out/$tag.json" "$out/$tag.attempt1-failed.json"
     a shell am force-stop com.android.chrome
     timeout -k 10 180 node scripts/drive.ts "$1" "$2" "$out" 2>&1 | tee -a "$out/drive.log"
     rc=${PIPESTATUS[0]}

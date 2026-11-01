@@ -2,25 +2,30 @@ name: gboard-ime
 
 on:
   push:
-    branches-ignore: [ios-keyboard-spike]
+    branches-ignore: [ios-keyboard-spike, probe/first-word]
   workflow_dispatch:
     inputs:
       locale:
         description: Extra emulator option, e.g. "-change-locale ja-JP" (needs su, which Play images lack). Empty for English.
         default: ''
+      langs:
+        description: JSON list of languages
+        default: '["en", "ja"]'
+      attempts:
+        description: JSON list of attempt numbers
+        default: '[1, 2, 3]'
 
 jobs:
   emulator:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
-        # baseline = published @portabletext/editor 8.2.4, the others are packed tarballs in page/tarballs.
-        variant: [baseline]
-        lang: [ja, en]
+        # Every job runs all four editor variants (scripts/build-variants.sh) and the plain controls.
+        lang: ${{ fromJSON(inputs.langs || '["en", "ja"]') }}
         api: [36]
-        attempt: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        attempt: ${{ fromJSON(inputs.attempts || '[1, 2, 3]') }}
     steps:
       - uses: actions/checkout@v4
 
@@ -39,14 +44,9 @@ jobs:
         with:
           node-version: 24
 
-      - name: Build test page
-        working-directory: page
-        run: |
-          if [ "${{ matrix.variant }}" != baseline ]; then
-            npm pkg set "dependencies.@portabletext/editor=file:tarballs/${{ matrix.variant }}.tgz"
-          fi
-          npm install --no-audit --no-fund --no-package-lock && npm run build
-          node -e "console.log('EDITOR_VERSION', require('./node_modules/@portabletext/editor/package.json').version)"
+      # One build per packed editor tarball, served under /main/, /placeholder/, /zw/ and /both/.
+      - name: Build test pages
+        run: mkdir -p out && scripts/build-variants.sh 2>&1 | tee out/build.log
 
       - name: Install the driver and fetch the uiautomator2 server jar
         run: |
@@ -56,12 +56,12 @@ jobs:
           node scripts/fetch-u2-jar.ts
 
       - name: Record start
-        run: mkdir -p out && echo "EMULATOR_START at $(date +%s)" | tee out/timing.txt
+        run: mkdir -p out && echo "EMULATOR_START at $(date +%s)" | tee -a out/timing.txt
 
       - name: Run on emulator
         id: run1
         continue-on-error: true
-        timeout-minutes: 16
+        timeout-minutes: 60
         env:
           IME_LANG: ${{ matrix.lang }}
         uses: reactivecircus/android-emulator-runner@v2
@@ -86,7 +86,7 @@ jobs:
 
       - name: Run on emulator (boot retry)
         if: steps.run1.outcome == 'failure' && steps.boot.outputs.booted == 'no'
-        timeout-minutes: 16
+        timeout-minutes: 60
         env:
           IME_LANG: ${{ matrix.lang }}
         uses: reactivecircus/android-emulator-runner@v2
@@ -118,5 +118,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: out-${{ matrix.variant }}-${{ matrix.lang }}-api${{ matrix.api }}-${{ matrix.attempt }}
+          name: out-${{ matrix.lang }}-api${{ matrix.api }}-${{ matrix.attempt }}
           path: out/

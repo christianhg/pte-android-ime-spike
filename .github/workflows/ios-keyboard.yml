@@ -10,13 +10,13 @@ on:
         default: '["en", "ja"]'
       attempts:
         description: JSON list of attempt numbers
-        default: '[1, 2, 3, 4, 5]'
+        default: '[1, 2, 3]'
       cases_en:
         description: English cases
-        default: kyou autocorrect edit actions interrupt
+        default: kyou edit
       cases_ja:
         description: Japanese cases
-        default: kyou interrupt
+        default: kyou
 
 jobs:
   simulator:
@@ -27,7 +27,7 @@ jobs:
       matrix:
         runner: [macos-15]
         lang: ${{ fromJSON(inputs.langs || '["en", "ja"]') }}
-        attempt: ${{ fromJSON(inputs.attempts || '[1, 2, 3, 4, 5]') }}
+        attempt: ${{ fromJSON(inputs.attempts || '[1, 2, 3]') }}
     steps:
       - uses: actions/checkout@v4
 
@@ -42,19 +42,9 @@ jobs:
           sw_vers; xcodebuild -version
           xcrun simctl list runtimes available
 
-      - name: Build test page
-        working-directory: page
-        run: |
-          npm pkg set "dependencies.@portabletext/editor=latest"
-          npm install --no-audit --no-fund --no-package-lock && npm run build
-          node -e "console.log('EDITOR_VERSION', require('./node_modules/@portabletext/editor/package.json').version)"
-          # Second build from a packed branch tarball, served under /fix/.
-          mv dist dist-main
-          npm pkg set "dependencies.@portabletext/editor=file:tarballs/placeholder-after-text-d3173ff85.tgz"
-          npm install --no-audit --no-fund --no-package-lock && npm run build
-          node -e "console.log('FIX_EDITOR_VERSION', require('./node_modules/@portabletext/editor/package.json').version)"
-          mv dist dist-main/fix && mv dist-main dist
-          ls dist dist/fix
+      # One build per packed editor tarball, served under /main/, /placeholder/, /zw/ and /both/.
+      - name: Build test pages
+        run: scripts/build-variants.sh 2>&1 | tee out/build.log
 
       - name: Install Appium and the XCUITest driver
         working-directory: ios
@@ -79,11 +69,14 @@ jobs:
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:4723/status > /dev/null && break; sleep 2; done
           echo "APPIUM up at $(date +%s)" | tee -a ../out/timing.txt
           status=0
-          if [ "$LANG_CASE" = en ]; then cases="${CASES_EN:-kyou autocorrect edit actions interrupt}"; else cases="${CASES_JA:-kyou interrupt}"; fi
+          # The first focus after boot often never raises the keyboard, so spend it on a warm-up page.
+          node drive.ts plain.html '' "$LANG_CASE" ../out/warmup warmup 2>&1 | tee -a ../out/drive.log
+          if [ "$LANG_CASE" = en ]; then cases="${CASES_EN:-kyou edit}"; else cases="${CASES_JA:-kyou}"; fi
+          pages="plain.html plain-zw.html"
+          for v in main placeholder zw both; do pages="$pages $v/editor.html $v/editor.html?placeholder=Write"; done
           for c in $cases; do
-          for args in "plain.html ''" "plain-zw.html ''" "editor.html ''" "editor.html?placeholder=Write ''" "fix/editor.html ''" "fix/editor.html?placeholder=Write ''" "editor.html x"; do
-            eval "set -- $args"
-            node drive.ts "$1" "$2" "$LANG_CASE" ../out "$c" 2>&1 | tee -a ../out/drive.log
+          for p in $pages; do
+            node drive.ts "$p" '' "$LANG_CASE" ../out "$c" 2>&1 | tee -a ../out/drive.log
             [ "${PIPESTATUS[0]}" -ne 0 ] && status=1
           done
           done

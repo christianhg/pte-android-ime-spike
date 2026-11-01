@@ -130,7 +130,15 @@ function isAscii(value: string): boolean {
 }
 
 async function typeWord(d: Device, out: string, tag: string, result: Result, n: string): Promise<void> {
-  for (const key of 'kyou') await tapKey(d, key)
+  for (const key of 'kyou') {
+    await tapKey(d, key)
+    if (n === '1' && key === 'k') {
+      // The same rects as before typing, once the first letter is in.
+      await sleep(0.3)
+      result.layoutAfterFirst = await cdpEval('window.__layout()')
+      await d.screenshot(`${out}/${tag}-first-letter`)
+    }
+  }
   phase(`typed kyou (${n})`)
   await d.screenshot(`${out}/${tag}-composing${n}`)
   result[`composing${n}`] = await cdpEval('window.__state()')
@@ -189,7 +197,8 @@ function writeJson(path: string, value: unknown): void {
 async function main(): Promise<void> {
   const [page, prefix, out] = process.argv.slice(2) as [string, string, string]
   mkdirSync(out, {recursive: true})
-  const tag = `${page.split('.')[0]}-${prefix ? 'prefix' : 'empty'}`
+  // main/editor.html?placeholder=Write -> main-editor-ph. Artifact names may not hold ? or /.
+  const tag = `${page.replace('.html', '').replace('?placeholder=Write', '-ph').replace(/[^a-z0-9-]/gi, '-')}-${prefix ? 'prefix' : 'empty'}`
   const result: Result = {page, prefix}
   // Say what the driver is blocked on shortly before the shell's timeout kills it.
   watchdog(165)
@@ -214,6 +223,15 @@ async function main(): Promise<void> {
         console.log(`dump failed: ${errorRepr(e)}`)
       }
     }
+    // What the page had when the case broke, as far as the page still answers.
+    try {
+      result.state = await cdpEval('window.__state()')
+      result.errors = await cdpEval('window.__errors')
+    } catch (e) {
+      result.stateError = errorRepr(e)
+    }
+    result.error = errorRepr(error)
+    writeJson(`${out}/${tag}.json`, result)
     throw error
   }
 }
@@ -240,7 +258,7 @@ async function run(page: string, prefix: string, out: string, tag: string, resul
   info ??= await d.info()
   phase(`uiautomator2 up: ${pyStr(info.productName)} ${pyRepr(await d.windowSize()).replace(/^\[(.*)\]$/, '($1)')}`)
 
-  const url = `http://localhost:${PORT}/${page}?prefix=${prefix}`
+  const url = `http://localhost:${PORT}/${page}${page.includes('?') ? '&' : '?'}prefix=${prefix}`
   setCurrentUrl(url)
   await adb(['shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', url, CHROME])
   phase('chrome launched')
@@ -320,6 +338,9 @@ async function run(page: string, prefix: string, out: string, tag: string, resul
   }
   phase('keyboard visible')
   await sleep(1)
+  // The focused empty field, before any key: rects of the line, placeholder and caret, the render branch.
+  result.layoutBefore = await cdpEval('window.__layout()')
+  await d.screenshot(`${out}/${tag}-empty-focused`)
 
   writeFileSync(`${out}/${tag}-keyboard.xml`, await d.dumpHierarchy())
   await d.screenshot(`${out}/${tag}-keyboard`)
@@ -338,6 +359,8 @@ async function run(page: string, prefix: string, out: string, tag: string, resul
   const second = state.events.slice(firstLen)
   result.second_word_compositionstart = second.filter((e) => e.type === 'compositionstart').length
   result.picked = `${pyStr(result.picked1)}/${pyStr(result.picked2)}`
+  result.firstLetterCapital = /^[A-Z]/.test(state.text ?? '')
+  result.errors = await cdpEval('window.__errors')
 
   writeJson(`${out}/${tag}.json`, result)
   const events = state.events
