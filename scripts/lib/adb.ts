@@ -9,14 +9,25 @@ export class CommandError extends Error {
   override name = 'CommandError'
 }
 
+/**
+ * The adb argv with every argument after `shell` quoted for the device shell. adb joins those arguments with
+ * spaces into one command line for the device's sh, so an unquoted URL with ? is a glob and one with & ends
+ * the command. Callers pass argv, never shell syntax, so quoting keeps each argument as it was written.
+ */
+export function adbArgs(args: string[]): string[] {
+  const at = args.indexOf('shell')
+  if (at < 0) return args
+  return [...args.slice(0, at + 1), ...args.slice(at + 1).map((a) => shellQuote([a]))]
+}
+
 /** Run adb and return stdout. Rejects on a non-zero exit or after `timeout` seconds, like subprocess.run(check=True). */
 export function adb(args: string[], timeout = 30): Promise<string> {
-  return tracked(`adb ${args.join(' ')}`, () => run('adb', args, timeout))
+  return tracked(`adb ${args.join(' ')}`, () => run('adb', adbArgs(args), timeout))
 }
 
 /** Run adb and return stdout whatever its exit code. Still rejects on a timeout, like subprocess.run without check. */
 export function adbOutput(args: string[], timeout = 60): Promise<string> {
-  return tracked(`adb ${args.join(' ')}`, () => run('adb', args, timeout, false))
+  return tracked(`adb ${args.join(' ')}`, () => run('adb', adbArgs(args), timeout, false))
 }
 
 /**
@@ -25,7 +36,7 @@ export function adbOutput(args: string[], timeout = 60): Promise<string> {
  */
 export function adbPassthrough(args: string[], timeout = 60): Promise<void> {
   return tracked(`adb ${args.join(' ')}`, () => new Promise((resolve, reject) => {
-    const child = spawn('adb', args, {stdio: ['ignore', 'inherit', 'inherit']})
+    const child = spawn('adb', adbArgs(args), {stdio: ['ignore', 'inherit', 'inherit']})
     const timer = setTimeout(() => {
       child.kill('SIGKILL')
       reject(new CommandError(`adb ${args.join(' ')} timed out after ${timeout}s`))

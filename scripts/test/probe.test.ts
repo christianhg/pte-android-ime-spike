@@ -3,7 +3,11 @@
 // built inline from the node shape uiautomator writes.
 
 import assert from 'node:assert/strict'
-import {existsSync, readFileSync} from 'node:fs'
+import {existsSync, mkdtempSync, readFileSync, writeFileSync} from 'node:fs'
+import {execFileSync} from 'node:child_process'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
+import {adbArgs} from '../lib/adb.ts'
 import {test} from 'node:test'
 import {probeLine} from '../probe.ts'
 import {caretMove, charsPerPixel, chromePid, cursorControlFromLog, dragDistance, dragSign, evidence, graphemeCount, graphemeIndex, hasWord, pageInfo, pageUrl, PAGES, parsePages, selectionCheck, textDirection, wordAt, wordSegments, type Step} from '../lib/probe-logic.ts'
@@ -509,5 +513,31 @@ test('zh: Chrome selected 你, a segmenter that keeps 你好 together reports a 
   assert.equal(check.expected, wordAt(segments, 0)!.segment)
   // An empty selection is a plain miss, not a mismatch.
   assert.equal(selectionCheck(segments, 0, '').mismatch, false)
+})
+
+/**
+ * What the device shell gets from `adb shell <args>`: adb joins the arguments with spaces into one line for
+ * sh -c. Run that line through a local sh in `cwd`, with printf standing in for am, and return the
+ * arguments am would see.
+ */
+function deviceArgv(argv: string[], cwd: string): string[] {
+  const line = argv.slice(argv.indexOf('shell') + 1).join(' ').replace(/^am /, "printf '%s\\n' ")
+  return execFileSync('sh', ['-c', line], {cwd, encoding: 'utf8'}).split('\n').filter(Boolean)
+}
+
+test('adb shell arguments reach the device shell as written, ? and & included', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'probe-sh-'))
+  // A file the unquoted ? glob would match, as any matching name in the shell's cwd would.
+  writeFileSync(join(cwd, 'http:'), '')
+  const url = 'http://localhost:8765/plain.html?prefix=a&b=1'
+  const argv = adbArgs(['shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', url, 'com.android.chrome'])
+  assert.deepEqual(deviceArgv(argv, cwd), ['start', '-a', 'android.intent.action.VIEW', '-d', url, 'com.android.chrome'])
+  // The round 5 URL, with ? and no &, also arrives intact.
+  const plain = 'http://localhost:8765/plain.html?prefix='
+  assert.deepEqual(deviceArgv(adbArgs(['shell', 'am', 'start', '-d', plain]), cwd), ['start', '-d', plain])
+  // Plain words and non-shell commands are left alone, so en and ja commands do not change.
+  assert.deepEqual(adbArgs(['shell', 'input', 'keyevent', 'KEYCODE_BACK']), ['shell', 'input', 'keyevent', 'KEYCODE_BACK'])
+  assert.deepEqual(adbArgs(['reverse', 'tcp:8765', 'tcp:8765']), ['reverse', 'tcp:8765', 'tcp:8765'])
+  assert.deepEqual(adbArgs(['shell', 'settings', 'put', 'secure', 'selected_input_method_subtype', '-1641843089']).at(-1), '-1641843089')
 })
 
