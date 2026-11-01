@@ -23,6 +23,11 @@ type Result = Record<string, unknown>
 // Chrome's first-run and promo screens, in case the command-line flags are ignored on this build.
 const FRE_BUTTONS = ['Use without an account', 'Accept & continue', 'No thanks', 'No, thanks', 'Got it', 'Continue', 'Skip']
 
+/** adb shell joins its args into one device-shell command line, so a URL with & must be quoted. */
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
 async function dismissChromeScreens(d: Device): Promise<void> {
   for (let i = 0; i < 6; i++) {
     let hit: string | undefined
@@ -260,7 +265,7 @@ async function run(page: string, prefix: string, out: string, tag: string, resul
 
   const url = `http://localhost:${PORT}/${page}${page.includes('?') ? '&' : '?'}prefix=${prefix}`
   setCurrentUrl(url)
-  await adb(['shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', url, CHROME])
+  await adb(['shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', shellQuote(url), CHROME])
   phase('chrome launched')
   await sleep(4)
   await dismissChromeScreens(d)
@@ -293,7 +298,7 @@ async function run(page: string, prefix: string, out: string, tag: string, resul
   phase(`before field lookup: ${pyRepr(await d.appCurrent())}`)
   await d.screenshot(`${out}/${tag}-loaded`)
   if ((await d.appCurrent()).package !== CHROME) {
-    await adb(['shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', url, CHROME])
+    await adb(['shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', shellQuote(url), CHROME])
     await sleep(3)
     phase(`re-foregrounded: ${pyRepr(await d.appCurrent())}`)
   }
@@ -323,7 +328,7 @@ async function run(page: string, prefix: string, out: string, tag: string, resul
     phase(`keyboard not shown after tap ${attempt + 1}, foreground ${pyRepr(await d.appCurrent())}, tapping again`)
     await dismissAnr(d)
     if ((await d.appCurrent()).package !== CHROME) {
-      await adb(['shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', url, CHROME])
+      await adb(['shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', shellQuote(url), CHROME])
       await sleep(3)
     }
     await d.click(x, y)
