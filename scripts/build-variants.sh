@@ -4,7 +4,7 @@
 # Usage: scripts/build-variants.sh (from the repo root). Prints one EDITOR_VERSION line per variant.
 set -eu
 cd page
-variants="main:editor-main-280e61b70 placeholder:editor-placeholder-03840d379 zw:editor-zw-b5a5c6ca7 both:editor-both-a90f36a35"
+variants="main:editor-main-280e61b70 placeholder:editor-placeholder-03840d379 zw:editor-zw-b5a5c6ca7 both:editor-both-a90f36a35 map:editor-map-b5ae50e2c"
 mkdir -p dist-all
 for entry in $variants; do
   name=${entry%%:*}

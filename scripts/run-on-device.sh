@@ -60,7 +60,7 @@ a reverse --list
 
 status=0
 pages="plain.html plain-zw.html"
-for v in main placeholder zw both; do pages="$pages $v/editor.html $v/editor.html?placeholder=Write"; done
+for v in ${VARIANTS:-main placeholder zw both map}; do pages="$pages $v/editor.html $v/editor.html?placeholder=Write"; done
 for page in $pages; do
   set -- "$page" ''
   tag=$(echo "${1%.html}" | sed 's/\.html?placeholder=Write/-ph/; s/[^a-zA-Z0-9-]/-/g')-empty

@@ -364,6 +364,7 @@ try {
   result.events = final.events
   result.steps = steps
   result.errors = await errors()
+  result.inputs = await browser.execute(() => (window as any).__inputs)
   await snapshot('final')
   phase(`RESULT ${JSON.stringify(final.text)} errors=${(result.errors as unknown[]).length}`)
 } catch (error) {
@@ -378,6 +379,7 @@ try {
       result.text = s.text
       result.events = s.events
       result.errors = await errors()
+      result.inputs = await browser.execute(() => (window as any).__inputs)
     } catch (e) {
       result.stateError = String(e).split('\n')[0]
     }

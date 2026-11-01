@@ -2,7 +2,8 @@
 // empty line's layout for the drivers through window.__layout().
 window.__errors = []
 const record = (kind, message) => window.__errors.push({kind, message: String(message).slice(0, 2000), t: Date.now()})
-window.addEventListener('error', (e) => record('error', e.error?.stack ?? e.message))
+// Safari stacks leave out the message, so record both.
+window.addEventListener('error', (e) => record('error', `${e.message}\n${e.error?.stack ?? ''}`))
 window.addEventListener('unhandledrejection', (e) => record('unhandledrejection', e.reason?.stack ?? e.reason))
 const consoleError = console.error
 console.error = (...args) => {
@@ -67,4 +68,34 @@ window.__layout = () => {
     fontSize: style?.fontSize ?? null,
     activeIsField: document.activeElement === field,
   }
+}
+
+// The DOM shape the editor sees when it maps each input's target range, captured before the editor's own handler.
+window.__inputs = []
+const describe = (node) => {
+  if (!node) return null
+  if (node.nodeType === 3) {
+    const parent = node.parentElement
+    return `#text ${JSON.stringify(node.data)} in ${parent ? parent.nodeName + '[' + [...parent.attributes].map((a) => a.name).join(' ') + ']' : 'detached'}`
+  }
+  return `${node.nodeName}[${node.attributes ? [...node.attributes].map((a) => a.name).join(' ') : ''}] connected=${node.isConnected}`
+}
+const captureInput = (e) => {
+  if (window.__inputs.length >= 60) return
+  const field = document.querySelector('[contenteditable="true"]')
+  const ranges = typeof e.getTargetRanges === 'function' ? e.getTargetRanges() : []
+  const selection = getSelection()
+  window.__inputs.push({
+    type: e.type,
+    inputType: e.inputType ?? null,
+    data: e.data ?? null,
+    isComposing: e.isComposing ?? null,
+    targetRanges: ranges.map((r) => ({start: describe(r.startContainer), startOffset: r.startOffset, end: describe(r.endContainer), endOffset: r.endOffset})),
+    selection: selection && selection.rangeCount ? {anchor: describe(selection.anchorNode), anchorOffset: selection.anchorOffset} : null,
+    blockInnerHTML: field?.querySelector('[data-pt-block]')?.innerHTML?.slice(0, 1500) ?? field?.innerHTML?.slice(0, 1500) ?? null,
+    t: Date.now(),
+  })
+}
+for (const type of ['beforeinput', 'input', 'compositionstart', 'compositionend']) {
+  window.addEventListener(type, captureInput, true)
 }

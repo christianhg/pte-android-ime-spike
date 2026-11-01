@@ -14,6 +14,9 @@ on:
       attempts:
         description: JSON list of attempt numbers
         default: '[1, 2, 3]'
+      variants:
+        description: Editor variants to drive (space separated)
+        default: main placeholder zw both map
 
 jobs:
   emulator:
@@ -44,7 +47,7 @@ jobs:
         with:
           node-version: 24
 
-      # One build per packed editor tarball, served under /main/, /placeholder/, /zw/ and /both/.
+      # One build per packed editor tarball, served under /main/, /placeholder/, /zw/, /both/ and /map/.
       - name: Build test pages
         run: mkdir -p out && scripts/build-variants.sh 2>&1 | tee out/build.log
 
@@ -64,6 +67,7 @@ jobs:
         timeout-minutes: 60
         env:
           IME_LANG: ${{ matrix.lang }}
+          VARIANTS: ${{ inputs.variants }}
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: ${{ matrix.api }}
@@ -89,6 +93,7 @@ jobs:
         timeout-minutes: 60
         env:
           IME_LANG: ${{ matrix.lang }}
+          VARIANTS: ${{ inputs.variants }}
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: ${{ matrix.api }}

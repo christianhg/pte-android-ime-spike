@@ -232,6 +232,7 @@ async function main(): Promise<void> {
     try {
       result.state = await cdpEval('window.__state()')
       result.errors = await cdpEval('window.__errors')
+      result.inputs = await cdpEval('window.__inputs')
     } catch (e) {
       result.stateError = errorRepr(e)
     }
@@ -366,6 +367,7 @@ async function run(page: string, prefix: string, out: string, tag: string, resul
   result.picked = `${pyStr(result.picked1)}/${pyStr(result.picked2)}`
   result.firstLetterCapital = /^[A-Z]/.test(state.text ?? '')
   result.errors = await cdpEval('window.__errors')
+  result.inputs = await cdpEval('window.__inputs')
 
   writeJson(`${out}/${tag}.json`, result)
   const events = state.events

@@ -11,6 +11,9 @@ on:
       attempts:
         description: JSON list of attempt numbers
         default: '[1, 2, 3]'
+      variants:
+        description: Editor variants to drive (space separated)
+        default: main placeholder zw both map
       cases_en:
         description: English cases
         default: kyou edit
@@ -42,7 +45,7 @@ jobs:
           sw_vers; xcodebuild -version
           xcrun simctl list runtimes available
 
-      # One build per packed editor tarball, served under /main/, /placeholder/, /zw/ and /both/.
+      # One build per packed editor tarball, served under /main/, /placeholder/, /zw/, /both/ and /map/.
       - name: Build test pages
         run: scripts/build-variants.sh 2>&1 | tee out/build.log
 
@@ -63,6 +66,7 @@ jobs:
           LANG_CASE: ${{ matrix.lang }}
           CASES_EN: ${{ inputs.cases_en }}
           CASES_JA: ${{ inputs.cases_ja }}
+          VARIANTS: ${{ inputs.variants }}
         run: |
           node ../scripts/serve.ts ../page/dist 8765 > ../out/http.log 2>&1 &
           npx appium --log ../out/appium.log --log-level info > /dev/null 2>&1 &
@@ -73,7 +77,7 @@ jobs:
           node drive.ts plain.html '' "$LANG_CASE" ../out/warmup warmup 2>&1 | tee -a ../out/drive.log
           if [ "$LANG_CASE" = en ]; then cases="${CASES_EN:-kyou edit}"; else cases="${CASES_JA:-kyou}"; fi
           pages="plain.html plain-zw.html"
-          for v in main placeholder zw both; do pages="$pages $v/editor.html $v/editor.html?placeholder=Write"; done
+          for v in ${VARIANTS:-main placeholder zw both map}; do pages="$pages $v/editor.html $v/editor.html?placeholder=Write"; done
           for c in $cases; do
           for p in $pages; do
             node drive.ts "$p" '' "$LANG_CASE" ../out "$c" 2>&1 | tee -a ../out/drive.log
