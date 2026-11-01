@@ -71,7 +71,7 @@ async function tap(name: string) {
 /** Tap whatever element is labelled `label` outside the keys, e.g. a candidate or a suggestion. */
 async function tapLabel(label: string): Promise<boolean> {
   await native()
-  const el = browser.$(`-ios predicate string:type == "XCUIElementTypeCell" AND name == "${label}"`)
+  const el = browser.$(`-ios predicate string:(type == "XCUIElementTypeCell" OR type == "XCUIElementTypeMenuItem") AND name == "${label}"`)
   if (!(await el.isExisting())) return false
   await el.click()
   return true
@@ -173,26 +173,45 @@ try {
     // One run through the action list: type, select by long-press, paste from the callout,
     // background and return, then type again.
     const actions: Record<string, unknown> = {}
+    result.actions = actions
     await typeLetters('hello')
     await tap('space')
     await typeLetters('world')
     actions.typed = (await state()).text
-    // Long-press the last word to select it, then read the selection from the page.
     await native()
-    const field = browser.$('//XCUIElementTypeWebView//XCUIElementTypeTextView')
-    const rect = await browser.getElementRect(await field.elementId)
-    await browser.execute('mobile: touchAndHold', {x: rect.x + 60, y: rect.y + 20, duration: 1.2})
-    await browser.pause(800)
+    await browser.execute('mobile: setPasteboard', {content: 'pasted', encoding: 'utf8'})
+    // Select the last word: double-tap it at its on-screen position, read from the page.
+    await web()
+    const box = (await browser.execute(() => {
+      const field = document.querySelector('[contenteditable="true"]')!
+      const walker = document.createTreeWalker(field, NodeFilter.SHOW_TEXT)
+      let last: Text | null = null
+      while (walker.nextNode()) if ((walker.currentNode as Text).data.includes('world')) last = walker.currentNode as Text
+      if (!last) return null
+      const range = document.createRange()
+      const start = last.data.indexOf('world')
+      range.setStart(last, start)
+      range.setEnd(last, start + 5)
+      const r = range.getBoundingClientRect()
+      return {x: r.left + r.width / 2, y: r.top + r.height / 2, vv: visualViewport?.offsetTop ?? 0}
+    })) as {x: number; y: number; vv: number} | null
+    await native()
+    const webView = browser.$('//XCUIElementTypeWebView')
+    const wv = await browser.getElementRect(await webView.elementId)
+    if (box) {
+      await browser.execute('mobile: doubleTap', {x: wv.x + box.x, y: wv.y + box.y})
+      await browser.pause(800)
+    }
+    actions.selectBox = box
     await snapshot('long-press')
     await web()
     actions.selection = await browser.execute(() => getSelection()?.toString())
-    // Paste: put text on the simulator pasteboard, then use the edit menu's Paste.
+    // Paste over the selection from the edit menu the double-tap raises.
     await native()
-    await browser.execute('mobile: setPasteboard', {content: 'pasted', encoding: 'utf8'})
     const pasteShown = await tapLabel('Paste')
     if (!pasteShown) {
       await native()
-      const paste = browser.$('-ios predicate string:label == "Paste" OR name == "Paste"')
+      const paste = browser.$('-ios predicate string:(label == "Paste" OR name == "Paste") AND (type == "XCUIElementTypeMenuItem" OR type == "XCUIElementTypeButton")')
       if (await paste.isExisting()) {
         await paste.click()
         actions.paste = 'menu item'
@@ -221,7 +240,7 @@ try {
     await browser.execute('mobile: shake').catch((e: unknown) => (actions.shake = String(e).split('\n')[0]))
     await browser.pause(1000)
     await snapshot('after-shake')
-    const undo = browser.$('-ios predicate string:label BEGINSWITH "Undo"')
+    const undo = browser.$('-ios predicate string:type == "XCUIElementTypeButton" AND label == "Undo"')
     actions.undoOffered = await undo.isExisting()
     if (actions.undoOffered) {
       await undo.click()

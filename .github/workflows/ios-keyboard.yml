@@ -64,7 +64,7 @@ jobs:
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:4723/status > /dev/null && break; sleep 2; done
           echo "APPIUM up at $(date +%s)" | tee -a ../out/timing.txt
           status=0
-          if [ "$LANG_CASE" = en ]; then cases="kyou autocorrect edit actions interrupt"; else cases="kyou interrupt"; fi
+          if [ "$LANG_CASE" = en ]; then cases="${CASES_EN:-kyou autocorrect edit actions interrupt}"; else cases="${CASES_JA:-kyou interrupt}"; fi
           for c in $cases; do
           for args in "plain.html ''" "plain-zw.html ''" "editor.html ''" "editor.html?placeholder=Write ''" "fix/editor.html ''" "fix/editor.html?placeholder=Write ''" "editor.html x"; do
             eval "set -- $args"
