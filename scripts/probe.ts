@@ -43,7 +43,7 @@ import {
   type Role,
   type Viewport,
 } from './lib/gboard.ts'
-import {caretMove, charsPerPixel, chromePid, cursorControlFromLog, dragSign, evidence, graphemeIndex, hasWord, pageInfo, pageUrl, parsePages, type DragSample, type Selection, type Step} from './lib/probe-logic.ts'
+import {caretMove, charsPerPixel, chromePid, cursorControlFromLog, dragSign, evidence, graphemeIndex, hasWord, pageInfo, pageUrl, parsePages, selectionCheck, type DragSample, type Selection, type Step, type WordSegment} from './lib/probe-logic.ts'
 import {Device} from './lib/u2.ts'
 import {errorRepr, phase, pyRepr, safePath, sleep} from './lib/util.ts'
 
@@ -167,16 +167,17 @@ const MIDDLE_GRAPHEME_JS = `(() => { ${OFFSET_JS}
 })()`
 
 /**
- * The first grapheme of the editable's text: its client rect and the word it starts. Long-press goes here,
- * away from the caret, which sits at the end of the word after typing.
+ * The first grapheme of the editable's text and its client rect. Long-press goes here, away from the caret,
+ * which sits at the end of the word after typing. Also the page's own word segmentation of the text (Chrome's
+ * Intl.Segmenter, Chrome's ICU), which the expected long-press selection is judged by.
  */
 const FIRST_GRAPHEME_JS = `(() => { const root = document.querySelector('[contenteditable]');
   const text = root.textContent; const seg = [...new Intl.Segmenter().segment(text)][0]; if (!seg) return null;
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT); const node = walker.nextNode(); if (!node) return null;
   const r = document.createRange(); r.setStart(node, 0); r.setEnd(node, Math.min(seg.segment.length, node.length));
   const b = r.getBoundingClientRect();
-  return {grapheme: seg.segment, rect: {left: b.left, right: b.right, top: b.top, bottom: b.bottom},
-    word: text.slice(0, text.trimEnd().length), viewport: ${VIEWPORT_JS}};
+  const words = [...new Intl.Segmenter(undefined, {granularity: 'word'}).segment(text)].map((s) => ({index: s.index, segment: s.segment, isWordLike: s.isWordLike}));
+  return {grapheme: seg.segment, offset: 0, rect: {left: b.left, right: b.right, top: b.top, bottom: b.bottom}, words, viewport: ${VIEWPORT_JS}};
 })()`
 
 const FIELD_JS = `(() => { const el = document.querySelector('[contenteditable]'); el.style.minHeight = '30vh'; const b = el.getBoundingClientRect();
@@ -626,18 +627,29 @@ const ACTIONS: Record<string, (ctx: Ctx) => Promise<void>> = {
     // glyph, right beside the caret left after typing. Chrome took that as a press on the caret: it showed
     // the insertion handle and its Select all / Read aloud menu, and selected nothing. Kyou passed because
     // its middle glyph sits two away from the caret.
-    const g = (await cdpEval(FIRST_GRAPHEME_JS)) as {grapheme: string; rect: {left: number; right: number; top: number; bottom: number}; word: string; viewport: Viewport} | null
+    const g = (await cdpEval(FIRST_GRAPHEME_JS)) as {grapheme: string; offset: number; rect: {left: number; right: number; top: number; bottom: number}; words: WordSegment[]; viewport: Viewport} | null
     if (!g) throw new Error('no text to long-press')
     const [x, y] = await toScreen(ctx.d, (g.rect.left + g.rect.right) / 2, (g.rect.top + g.rect.bottom) / 2, g.viewport)
     await ctx.d.longClick(x, y, 1.0)
     await sleep(1)
     const s = await record(ctx, 'long-press', {screen: [x, y], pressed: g.grapheme, rect: g.rect})
     await ctx.d.screenshot(`${ctx.base}-selected`)
-    ctx.notes.selected = s.selection.selected ?? null
-    ctx.notes.selected_word = (s.selection.selected ?? '').trim() === g.word.trim()
+    // The expected selection is the word the page's Intl.Segmenter puts at the press, not the whole text:
+    // round 5's check wanted 你好 where Chrome selected 你.
+    const check = selectionCheck(g.words, g.offset, s.selection.selected ?? '')
+    ctx.notes.selected = check.selected
+    ctx.notes.expected_word = check.expected
+    ctx.notes.page_word_segments = g.words
+    ctx.notes.selected_word = check.ok
     // Close Chrome's selection toolbar, so it cannot cover the next action's field.
     await adbOutput(['shell', 'input', 'keyevent', 'KEYCODE_BACK'])
-    if (!ctx.notes.selected_word) throw new Error(`selected ${pyRepr(s.selection.selected)}, expected ${pyRepr(g.word)}`)
+    if (check.mismatch) {
+      // Chrome selected part of the segmenter's word. Both come from the same page, so this is a real
+      // disagreement between Chrome's selection and Intl.Segmenter, kept as its own failure.
+      ctx.notes.word_segmentation_mismatch = true
+      throw new Error(`word segmentation mismatch: Chrome selected ${pyRepr(check.selected)}, the page's Intl.Segmenter has ${pyRepr(check.expected)}`)
+    }
+    if (!check.ok) throw new Error(`selected ${pyRepr(check.selected)}, expected ${pyRepr(check.expected)}`)
   },
 
   async emoji(ctx) {

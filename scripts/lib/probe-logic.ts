@@ -159,3 +159,31 @@ export function pageUrl(page: string, port: number): string {
 export function pageInfo(page: string, versions: {editor?: string}): {page: string; editor: string | null} {
   return {page, editor: PAGES[page]!.editor ? (versions.editor ?? 'unknown') : null}
 }
+
+export type WordSegment = {index: number; segment: string; isWordLike?: boolean | undefined}
+
+/** Word segments of `text`, from Intl.Segmenter granularity word, the segmentation a long-press selects by. */
+export function wordSegments(text: string, locale?: string): WordSegment[] {
+  return [...new Intl.Segmenter(locale, {granularity: 'word'}).segment(text)].map((s) => ({index: s.index, segment: s.segment, isWordLike: s.isWordLike}))
+}
+
+/** The word-like segment containing UTF-16 `offset`, or undefined when the offset is in spaces or punctuation. */
+export function wordAt(segments: WordSegment[], offset: number): WordSegment | undefined {
+  return segments.find((s) => s.isWordLike !== false && offset >= s.index && offset < s.index + s.segment.length)
+}
+
+export type SelectionCheck = {expected: string | null; selected: string; ok: boolean; mismatch: boolean}
+
+/**
+ * Judge a long-press selection against the word the segmenter puts at the press. `segments` must come from
+ * the same text the selection was made in, ideally from the page's own Intl.Segmenter. A selection that is
+ * a different word-like run inside the expected one (Chrome selecting 你 where the segmenter gives 你好) is
+ * a segmentation mismatch, reported as such rather than counted as a pass or a plain miss.
+ */
+export function selectionCheck(segments: WordSegment[], pressOffset: number, selected: string): SelectionCheck {
+  const word = wordAt(segments, pressOffset)
+  const got = selected.trim()
+  if (!word) return {expected: null, selected: got, ok: false, mismatch: false}
+  const ok = got === word.segment
+  return {expected: word.segment, selected: got, ok, mismatch: !ok && got !== '' && word.segment.includes(got)}
+}

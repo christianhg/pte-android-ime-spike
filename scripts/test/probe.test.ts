@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import {existsSync, readFileSync} from 'node:fs'
 import {test} from 'node:test'
 import {probeLine} from '../probe.ts'
-import {caretMove, charsPerPixel, chromePid, cursorControlFromLog, dragDistance, dragSign, evidence, graphemeCount, graphemeIndex, hasWord, pageInfo, pageUrl, PAGES, parsePages, textDirection, type Step} from '../lib/probe-logic.ts'
+import {caretMove, charsPerPixel, chromePid, cursorControlFromLog, dragDistance, dragSign, evidence, graphemeCount, graphemeIndex, hasWord, pageInfo, pageUrl, PAGES, parsePages, selectionCheck, textDirection, wordAt, wordSegments, type Step} from '../lib/probe-logic.ts'
 import {
   charKey,
   classifyLayout,
@@ -483,5 +483,31 @@ test('caret moves count grapheme clusters, not code units (Hindi drag, round 5)'
   assert.equal(caretMove('Tiếng ', 6, 3), 3, 'precomposed Vietnamese')
   assert.equal(caretMove('Tie\u0302\u0301ng ', 8, 3), 3, 'decomposed Vietnamese: one cluster per letter')
   assert.equal(caretMove(HINDI, 2, 7), -2, 'forward is negative')
+})
+
+test('the expected long-press selection is the segmenter word at the press, not the whole text', () => {
+  // Round 5: Für, Kyou, שלום, नमस्ते, 한국 and สวัสดี each selected the segmenter's word at offset 0.
+  for (const [text, word] of [['Für ', 'Für'], ['Kyou ', 'Kyou'], ['שלום ', 'שלום'], ['नमस्ते ', 'नमस्ते'], ['한국 ', '한국'], ['Tiếng ', 'Tiếng']] as const) {
+    assert.deepEqual(selectionCheck(wordSegments(text), 0, word), {expected: word, selected: word, ok: true, mismatch: false}, text)
+  }
+  // Two words: the press on the second one expects only that one.
+  assert.equal(wordAt(wordSegments('K you '), 2)?.segment, 'you')
+  assert.equal(wordAt(wordSegments('K you '), 1), undefined, 'a space is not a word')
+  // Chrome's selection is judged against segments from the page, whatever they say.
+  const chromeLike = [{index: 0, segment: '你', isWordLike: true}, {index: 1, segment: '好', isWordLike: true}, {index: 2, segment: ' ', isWordLike: false}]
+  assert.deepEqual(selectionCheck(chromeLike, 0, '你'), {expected: '你', selected: '你', ok: true, mismatch: false})
+})
+
+test('zh: Chrome selected 你, a segmenter that keeps 你好 together reports a mismatch, not a pass', () => {
+  // Round 5 zh, both pages, both jobs: text 你好, press on 你, Chrome selected 你 (0..1). Node's ICU keeps
+  // 你好 as one word, so on these segments the probe must say mismatch, with both values in the record.
+  const segments = wordSegments('你好 ', 'zh')
+  const check = selectionCheck(segments, 0, '你')
+  assert.equal(check.ok, false)
+  assert.equal(check.mismatch, true)
+  assert.equal(check.selected, '你')
+  assert.equal(check.expected, wordAt(segments, 0)!.segment)
+  // An empty selection is a plain miss, not a mismatch.
+  assert.equal(selectionCheck(segments, 0, '').mismatch, false)
 })
 
