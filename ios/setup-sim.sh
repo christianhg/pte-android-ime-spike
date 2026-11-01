@@ -23,6 +23,7 @@ fi
 sp defaults write -g AppleKeyboardsExpanded -int 1
 for k in KeyboardAutocorrection KeyboardPrediction KeyboardAutocapitalization KeyboardCheckSpelling DidShowContinuousPathIntroduction KeyboardDidShowProductivityTutorial; do
   sp defaults write com.apple.Preferences "$k" -bool true
+  sp defaults write com.apple.keyboard.preferences "$k" -bool true
 done
 sp defaults write com.apple.Preferences KeyboardContinuousPathEnabled -bool false
 sp defaults read -g AppleKeyboards | tee -a "$out/sim.txt"

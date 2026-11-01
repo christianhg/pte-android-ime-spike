@@ -7,7 +7,7 @@ import {remote} from 'webdriverio'
 
 const [page, prefix, lang, out, caseName] = process.argv.slice(2) as [string, string, 'en' | 'ja', string, string]
 mkdirSync(out, {recursive: true})
-const tag = `${lang}-${caseName}-${page.replace('.html', '').replace(/[?=&]/g, '-')}-${prefix || 'empty'}`
+const tag = `${lang}-${caseName}-${page.replace('.html', '').replace(/[?=&/]/g, '-')}-${prefix || 'empty'}`
 const t0 = Date.now()
 const phase = (msg: string) => console.log(`PHASE +${((Date.now() - t0) / 1000).toFixed(1)}s ${tag} ${msg}`)
 
@@ -82,13 +82,19 @@ async function state() {
 }
 async function typeLetters(word: string) {
   // Only English: a composing Japanese field may not report the text until conversion.
-  if (lang === "ja") {
+  if (lang === 'ja') {
     for (const letter of word) await tap(letter)
     return
   }
   const before = (await state()).text.length
   await tap(word[0]!)
-  if ((await state()).text.length === before) {
+  // The page can lag the tap, so give it a second before calling the tap dropped.
+  let landed = false
+  for (let i = 0; i < 5 && !landed; i++) {
+    await browser.pause(200)
+    landed = (await state()).text.length > before
+  }
+  if (!landed) {
     result.droppedFirstTap = ((result.droppedFirstTap as number) ?? 0) + 1
     phase(`DROPPED first tap of ${word}, tapping again`)
     await tap(word[0]!)
@@ -163,6 +169,77 @@ try {
     steps.push({after: 'teh space', text: (await state()).text})
     await typeLetters('cat')
     await tap('space')
+  } else if (caseName === 'actions') {
+    // One run through the action list: type, select by long-press, paste from the callout,
+    // background and return, then type again.
+    const actions: Record<string, unknown> = {}
+    await typeLetters('hello')
+    await tap('space')
+    await typeLetters('world')
+    actions.typed = (await state()).text
+    // Long-press the last word to select it, then read the selection from the page.
+    await native()
+    const field = browser.$('//XCUIElementTypeWebView//XCUIElementTypeTextView')
+    const rect = await browser.getElementRect(await field.elementId)
+    await browser.execute('mobile: touchAndHold', {x: rect.x + 60, y: rect.y + 20, duration: 1.2})
+    await browser.pause(800)
+    await snapshot('long-press')
+    await web()
+    actions.selection = await browser.execute(() => getSelection()?.toString())
+    // Paste: put text on the simulator pasteboard, then use the edit menu's Paste.
+    await native()
+    await browser.execute('mobile: setPasteboard', {content: 'pasted', encoding: 'utf8'})
+    const pasteShown = await tapLabel('Paste')
+    if (!pasteShown) {
+      await native()
+      const paste = browser.$('-ios predicate string:label == "Paste" OR name == "Paste"')
+      if (await paste.isExisting()) {
+        await paste.click()
+        actions.paste = 'menu item'
+      } else actions.paste = 'no Paste in the edit menu'
+    }
+    await browser.pause(1000)
+    await snapshot('after-paste')
+    actions.afterPaste = (await state()).text
+    // Background Safari and come back.
+    await native()
+    await browser.execute('mobile: backgroundApp', {seconds: 2})
+    await browser.pause(1500)
+    await snapshot('after-background')
+    actions.keyboardAfterBackground = await browser.$('//XCUIElementTypeKeyboard').isExisting()
+    if (!actions.keyboardAfterBackground) {
+      await web()
+      await browser.$('[contenteditable="true"]').click()
+      await native()
+      await browser.$('//XCUIElementTypeKeyboard').waitForExist({timeout: 10_000})
+    }
+    await tap('space')
+    await typeLetters('again')
+    actions.afterBackground = (await state()).text
+    // Shake to undo (iPhone has no undo key).
+    await native()
+    await browser.execute('mobile: shake').catch((e: unknown) => (actions.shake = String(e).split('\n')[0]))
+    await browser.pause(1000)
+    await snapshot('after-shake')
+    const undo = browser.$('-ios predicate string:label BEGINSWITH "Undo"')
+    actions.undoOffered = await undo.isExisting()
+    if (actions.undoOffered) {
+      await undo.click()
+      await browser.pause(800)
+    }
+    actions.afterUndo = (await state()).text
+    result.actions = actions
+  } else if (caseName === 'interrupt') {
+    // Tap outside the editor while a word is composing, then read what was committed.
+    await typeLetters('kyou')
+    await snapshot('composing')
+    const before = await state()
+    await web()
+    await browser.$('#outside').click()
+    await browser.pause(1000)
+    const after = await state()
+    steps.push({before: before.text, after: after.text})
+    await snapshot('after-outside')
   } else if (caseName === 'edit') {
     await typeLetters('ab')
     await tap('delete')
