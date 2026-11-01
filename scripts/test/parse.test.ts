@@ -306,3 +306,28 @@ test('the space probe judges the page and dumpsys input_method diffs', () => {
   assert.equal(pageGotSpace([], 'kyou', 'kyou'), false)
   assert.deepEqual(diffLines('a\n  mInputShown=true\nb', 'a\n  mInputShown=false\nb'), {added: ['  mInputShown=false'], removed: ['  mInputShown=true']})
 })
+
+test('a strip sampled after a Space is read against the word committed and the letters typed since', async () => {
+  const {classify, suggestions} = await import('../probe-space-parallel.ts')
+  // The strips the Space probe recorded on API 36 (run 41255435645) around the Space after kyou.
+  const before = ['Open features menu', 'Kyou', 'You', 'Kyu', 'Use voice typing']
+  const after = ['Open features menu', 'you', 'I', 'to', 'Use voice typing']
+  assert.deepEqual(suggestions(after), ['you', 'I', 'to'])
+  assert.equal(classify(before, 'kyou', ''), 'completions')
+  assert.equal(classify(after, 'kyou', ''), 'predictions')
+  // The next word's letters: completions of `ky` are no completion of kyou, which the driver's check would
+  // count as a switch.
+  assert.equal(classify(['Open features menu', 'ky', 'kyle', 'Use voice typing'], 'kyou', 'ky'), 'next')
+  assert.equal(classify(['Open features menu', 'Use voice typing'], 'kyou', 'k'), 'empty')
+})
+
+test('a tap is matched to its uiautomator2 request and to the key Gboard logged after it', async () => {
+  const {deviceLags} = await import('../probe-space-parallel.ts')
+  const lines = [
+    {t: 100.07, tag: 'UIAutomatorStub', line: 'x {"jsonrpc":"2.0","id":1,"method":"click","params":[593,2196]}'},
+    {t: 100.2, tag: 'ProactiveUndoTriggerExtension', line: 'kyp{intention=null, keyCode=62, SPACE, data= }'},
+  ]
+  const tap = {word: 1, key: 'Space', requestAt: 100, respondedAt: 100.1, dumpsInFlight: 1}
+  assert.deepEqual(deviceLags(lines, [tap], 0), [{request: 100.07, gboard: 100.2}])
+  assert.deepEqual(deviceLags(lines, [{...tap, requestAt: 50, respondedAt: 50.1}], 0), [{request: undefined, gboard: undefined}])
+})

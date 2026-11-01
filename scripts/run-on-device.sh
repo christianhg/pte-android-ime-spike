@@ -106,6 +106,14 @@ elif [ "${PROBE:-}" = space ]; then
   status=${PIPESTATUS[0]}
   log "space probe rc=$status"
   cases=()
+elif [ "${PROBE:-}" = space-parallel ]; then
+  # The space-parallel probe replaces the three cases: kyou kyou with and without strip dumps and log markers
+  # running alongside the taps, to see whether they delay a tap and what the strip shows once letters follow.
+  log "space parallel probe start"
+  timeout -k 10 1200 node scripts/probe-space-parallel.ts "$out" 2>&1 | tee -a "$out/drive.log"
+  status=${PIPESTATUS[0]}
+  log "space parallel probe rc=$status"
+  cases=()
 else
   cases=("plain.html ''" "editor.html ''" "editor.html x")
 fi

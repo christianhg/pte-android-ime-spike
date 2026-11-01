@@ -291,7 +291,7 @@ export function pageGotSpace(events: PageEvent[], textBefore: string, textAfter:
 const eventsRepr = (events: PageEvent[]): string[] => events.map((e) => `${e.type}${e.inputType ? `:${e.inputType}` : ''}${e.data != null ? `:${pyRepr(e.data)}` : ''}`)
 
 /** logcat -v epoch from now on, held in memory, so each tap can take the lines in its own window. */
-class LogStream {
+export class LogStream {
   lines: LogLine[] = []
   #rest = ''
   constructor() {
@@ -336,12 +336,12 @@ function getevent(seconds: number): Promise<string> {
   })
 }
 
-async function state(): Promise<PageState> {
+export async function state(): Promise<PageState> {
   return (await cdpEval('window.__state()')) as PageState
 }
 
 /** The device clock minus the host clock in seconds, from the midpoint of one `date` call. */
-async function clockOffset(): Promise<number> {
+export async function clockOffset(): Promise<number> {
   const t0 = Date.now() / 1000
   const device = Number((await adb(['shell', 'date', '+%s.%N'])).trim())
   const t1 = Date.now() / 1000
@@ -375,7 +375,7 @@ async function settled(d: Device): Promise<{xml: string; nodes: Node[]}> {
  * then polls the dump for 4s. From the third attempt the field is blurred over CDP first, so Chrome starts a fresh
  * input connection when it is focused again.
  */
-async function showKeyboard(d: Device): Promise<Node[]> {
+export async function showKeyboard(d: Device): Promise<Node[]> {
   let nodes = gboardNodes(await d.dumpHierarchy())
   if (keyboardReady(nodes)) return nodes
   for (let attempt = 1; attempt <= KEYBOARD_ATTEMPTS; attempt++) {
@@ -400,7 +400,7 @@ async function showKeyboard(d: Device): Promise<Node[]> {
 }
 
 /** Empty the field with Gboard's Delete key, then over CDP for anything left. */
-async function clear(d: Device): Promise<void> {
+export async function clear(d: Device): Promise<void> {
   let s = await state()
   if (!s.text) return
   const del = gboardNodes(await d.dumpHierarchy()).find((n) => n.rid === 'key_pos_del')
