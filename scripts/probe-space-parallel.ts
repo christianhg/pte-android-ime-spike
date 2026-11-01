@@ -45,7 +45,8 @@ const AFTER_SPACE = 1.5
 const SAMPLE_SECONDS = 6
 const JOIN_SECONDS = 3
 
-type Tap = {word: number; key: string; requestAt: number; respondedAt: number; dumpsInFlight: number; mark?: Mark}
+// `strip` is the strip in the dump the tap's key was found in, which the driver takes anyway before every tap.
+type Tap = {word: number; key: string; dumpAt: number; strip: string[]; requestAt: number; respondedAt: number; dumpsInFlight: number; mark?: Mark}
 type Mark = {marker: string; startedAt: number; endedAt?: number; ok?: boolean; error?: string}
 type Sample = {space: number; startedAt: number; endedAt: number; strip: string[]; error?: string}
 type Record_ = {
@@ -124,10 +125,12 @@ async function sampler(d: Device, space: number, seconds: number, samples: Sampl
 
 /** One tap the way the driver taps a key: a dump for the key's place, the tap, then the pace. */
 async function tapKey(d: Device, label: string, word: number, rec: Record_, marks: boolean): Promise<void> {
-  const keys = packageKeys(await dump(d), GBOARD)
+  const dumpAt = Date.now() / 1000
+  const xml = await dump(d)
+  const keys = packageKeys(xml, GBOARD)
   const center = keys.get(label) ?? keys.get(label.toUpperCase())
   if (!center) throw new Error(`no Gboard key ${pyRepr(label)}`)
-  const tap: Tap = {word, key: label, requestAt: 0, respondedAt: 0, dumpsInFlight: inFlight}
+  const tap: Tap = {word, key: label, dumpAt, strip: suggestions(stripLabels(gboardNodes(xml))), requestAt: 0, respondedAt: 0, dumpsInFlight: inFlight}
   if (marks) tap.mark = mark()
   tap.requestAt = Date.now() / 1000
   await d.click(...center)
@@ -203,12 +206,14 @@ function report(r: Record_): void {
   )
   for (const t of r.taps)
     console.log(
-      `PAR_TAP arm=${r.arm} rep=${r.rep} word=${t.word} key=${t.key} click_ms=${ms(t.respondedAt - t.requestAt)} dumps_in_flight=${t.dumpsInFlight}${t.mark ? ` mark_ms=${t.mark.endedAt ? ms(t.mark.endedAt - t.mark.startedAt) : 'pending'} mark_ok=${t.mark.ok}` : ''}`,
+      `PAR_TAP arm=${r.arm} rep=${r.rep} word=${t.word} key=${t.key} strip_before_tap=${pyRepr(t.strip)} click_ms=${ms(t.respondedAt - t.requestAt)} dumps_in_flight=${t.dumpsInFlight}${t.mark ? ` mark_ms=${t.mark.endedAt ? ms(t.mark.endedAt - t.mark.startedAt) : 'pending'} mark_ok=${t.mark.ok}` : ''}`,
     )
   for (const space of [1, 2]) {
     const spaceTap = r.taps.filter((t) => t.word === space && t.key === 'Space')[0]
     if (!spaceTap) continue
     const next = r.taps.filter((t) => t.word === space + 1)
+    // The driver's own dump before the next word's first letter: the read a strip check could reuse.
+    if (next[0]) console.log(`PAR_REUSE arm=${r.arm} rep=${r.rep} space=${space} dump_at=+${(next[0].dumpAt - spaceTap.requestAt).toFixed(2)} kind=${classify(next[0].strip, WORDS[space - 1]!, '')} strip=${pyRepr(next[0].strip)}`)
     for (const s of r.samples.filter((x) => x.space === space)) {
       // Letters of the next word whose tap was answered before this dump started. Gboard's own handling time
       // is matched from logcat in the report.
@@ -242,7 +247,12 @@ export function summary(recs: Record_[], arm: Arm): string {
   const taps = rs.flatMap((r) => r.taps)
   const clicks = taps.map((t) => (t.respondedAt - t.requestAt) * 1000).sort((a, b) => a - b)
   const q = (p: number) => (clicks.length ? Math.round(clicks[Math.min(clicks.length - 1, Math.floor(p * clicks.length))]!) : NaN)
-  return `PAR_SUMMARY arm=${arm} reps=${rs.length} faults=${rs.filter((r) => r.fault).length} text_ok=${rs.filter((r) => r.ok).length} taps=${taps.length} overlapped=${taps.filter((t) => t.dumpsInFlight > 0).length} click_ms_p50=${q(0.5)} p90=${q(0.9)} max=${q(1)}`
+  const reuse = rs.flatMap((r) => {
+    const space = r.taps.find((t) => t.word === 1 && t.key === 'Space')
+    const next = r.taps.find((t) => t.word === 2)
+    return space && next ? [classify(next.strip, WORDS[0]!, '')] : []
+  })
+  return `PAR_SUMMARY arm=${arm} reps=${rs.length} reuse_predictions=${reuse.filter((k) => k === 'predictions').length}/${reuse.length} faults=${rs.filter((r) => r.fault).length} text_ok=${rs.filter((r) => r.ok).length} taps=${taps.length} overlapped=${taps.filter((t) => t.dumpsInFlight > 0).length} click_ms_p50=${q(0.5)} p90=${q(0.9)} max=${q(1)}`
 }
 
 async function main(): Promise<void> {

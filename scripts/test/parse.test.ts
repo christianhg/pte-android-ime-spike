@@ -327,7 +327,7 @@ test('a tap is matched to its uiautomator2 request and to the key Gboard logged 
     {t: 100.07, tag: 'UIAutomatorStub', line: 'x {"jsonrpc":"2.0","id":1,"method":"click","params":[593,2196]}'},
     {t: 100.2, tag: 'ProactiveUndoTriggerExtension', line: 'kyp{intention=null, keyCode=62, SPACE, data= }'},
   ]
-  const tap = {word: 1, key: 'Space', requestAt: 100, respondedAt: 100.1, dumpsInFlight: 1}
+  const tap = {word: 1, key: 'Space', dumpAt: 99.5, strip: [], requestAt: 100, respondedAt: 100.1, dumpsInFlight: 1}
   assert.deepEqual(deviceLags(lines, [tap], 0), [{request: 100.07, gboard: 100.2}])
   assert.deepEqual(deviceLags(lines, [{...tap, requestAt: 50, respondedAt: 50.1}], 0), [{request: undefined, gboard: undefined}])
 })
