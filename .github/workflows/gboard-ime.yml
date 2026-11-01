@@ -18,9 +18,9 @@ jobs:
         # slate-latest is the newest slate-react (same packages as Slate main). slate-0.126.0 and
         # slate-0.126.3 are the releases either side of Slate's empty-leaf fix (#6096).
         # pte-8.2.10 is @portabletext/editor after its own empty-block fix.
-        variant: [slate-latest, slate-0.126.3, slate-0.126.0, pte-8.2.10]
-        lang: [ja, en]
-        attempt: [1, 2, 3, 4, 5]
+        variant: [slate-latest, pte-8.2.10]
+        lang: [ja]
+        attempt: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         include:
           # Japanese composes on API 36. English composes only on API 34's Gboard.
           - lang: ja
@@ -72,6 +72,7 @@ jobs:
         timeout-minutes: 16
         env:
           IME_LANG: ${{ matrix.lang }}
+          COMMIT: space
           PAGE: ${{ startsWith(matrix.variant, 'slate') && 'slate.html' || 'editor.html' }}
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -98,6 +99,7 @@ jobs:
         timeout-minutes: 16
         env:
           IME_LANG: ${{ matrix.lang }}
+          COMMIT: space
           PAGE: ${{ startsWith(matrix.variant, 'slate') && 'slate.html' || 'editor.html' }}
         uses: reactivecircus/android-emulator-runner@v2
         with:

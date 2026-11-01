@@ -58,6 +58,8 @@ page=${PAGE:-editor.html}
 # The after-Enter case needs Gboard's Enter key to split the block. It runs on Japanese only.
 cases=("plain.html ''" "$page ''" "$page x")
 [ "${IME_LANG:-en}" = ja ] && cases+=("$page x+enter")
+# COMMIT=space probes the empty block only.
+[ "${COMMIT:-}" = space ] && cases=("plain.html ''" "$page ''")
 for args in "${cases[@]}"; do
   eval "set -- $args"
   log "case $1 prefix='$2' start"

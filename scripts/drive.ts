@@ -145,7 +145,8 @@ async function typeWord(d: Device, out: string, tag: string, result: Result, n: 
     }
   }
   result[`candidates${n}`] = [...keys.keys()].filter((k) => pyLen(k) <= 6 && !isAscii(k)).slice(0, 30)
-  const kanji = keys.get('今日')
+  // COMMIT=space always commits with Space, so the kana commit path runs on every attempt.
+  const kanji = process.env.COMMIT === 'space' ? undefined : keys.get('今日')
   if (kanji) {
     await d.click(...kanji)
     result[`picked${n}`] = '今日'
@@ -155,6 +156,7 @@ async function typeWord(d: Device, out: string, tag: string, result: Result, n: 
     result[`picked${n}`] = 'space'
   }
   await sleep(1.5)
+  result[`after${n}`] = await cdpEval('window.__state()')
   await d.screenshot(`${out}/${tag}-after${n}`)
 }
 
