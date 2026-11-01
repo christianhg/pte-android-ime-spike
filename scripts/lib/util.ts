@@ -94,3 +94,12 @@ export function errorRepr(error: unknown): string {
   }
   return String(error)
 }
+
+/**
+ * A path whose file name holds only [A-Za-z0-9._-], so actions/upload-artifact accepts it. Round 2 named an
+ * emoji dump `...-panel?.xml` and 8 of 18 jobs lost their artifacts. Directories are left as they are.
+ */
+export function safePath(path: string): string {
+  const slash = path.lastIndexOf('/')
+  return path.slice(0, slash + 1) + path.slice(slash + 1).replace(/[^A-Za-z0-9._-]/g, '_')
+}

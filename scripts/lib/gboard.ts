@@ -227,15 +227,35 @@ export function originFromTap(screen: [number, number], client: {x: number; y: n
   return {left: Math.round(screen[0] - client.x * k), top: Math.round(screen[1] - client.y * k)}
 }
 
-export type WindowMetrics = {dpr: number; innerHeight: number; outerHeight: number; screenHeight: number}
+// Chrome's top toolbar is 56dp. Round 1 and 2 dumps on the pixel_6 (dpr 2.625) put it at 128..275.
+const TOOLBAR_DP = 56
 
 /**
- * The content origin from window metrics alone, before any tap. Chrome's toolbar sits above the content,
- * so the content starts outerHeight - innerHeight CSS pixels below the window top, and the window starts
- * below the status bar, which `statusBar` gives in screen pixels.
+ * The content origin from a dump, before any tap, and where it came from. Chrome's WebView node is exact
+ * but missing whenever something covers the page (round 1's notifications promo, round 2's open omnibox).
+ * Next best is the bottom of Chrome's toolbar, then the status bar plus a 56dp toolbar. Round 2 estimated
+ * from outerHeight - innerHeight, which is 0 in Chrome on Android, so it put the origin at the status bar
+ * (128 instead of 275), 147px too high.
  */
-export function originFromWindow(m: WindowMetrics, statusBar: number): Origin {
-  return {left: 0, top: Math.round(statusBar + (m.outerHeight - m.innerHeight) * m.dpr)}
+export function originFromScreen(xml: string, dpr: number): {origin: Origin; source: 'webview' | 'toolbar' | 'statusbar'} {
+  const nodes = parseXml(xml)
+  const webView = nodes.find((n) => n.attrs.class === 'android.webkit.WebView' && n.attrs.package === 'com.android.chrome')
+  if (webView) {
+    const b = parseBounds(webView.attrs.bounds!)
+    return {origin: {left: b.left, top: b.top}, source: 'webview'}
+  }
+  const toolbar = nodes.find((n) => n.attrs['resource-id'] === 'com.android.chrome:id/toolbar')
+  if (toolbar) return {origin: {left: 0, top: parseBounds(toolbar.attrs.bounds!).bottom}, source: 'toolbar'}
+  return {origin: {left: 0, top: Math.round((statusBarHeight(xml) ?? 0) + TOOLBAR_DP * dpr)}, source: 'statusbar'}
+}
+
+/**
+ * Whether Chrome's omnibox is open over the page. A tap that lands in the toolbar opens it, Gboard then
+ * types into the URL bar, and the page and its editor sit behind the suggestion list (round 2, after
+ * every Chrome relaunch).
+ */
+export function omniboxOpen(xml: string): boolean {
+  return parseXml(xml).some((n) => n.attrs['resource-id'] === 'com.android.chrome:id/omnibox_results_container')
 }
 
 /** Height of the status bar in screen pixels, from a dump's systemui status bar node. */
@@ -327,4 +347,15 @@ export function subtypeHashFromLog(log: string, code: string): string | undefine
     if (hash && locale && locale !== '?' && localeMatches(locale, code)) return hash
   }
   return undefined
+}
+
+/** The focused field's inputType from `dumpsys input_method` (curEditorInfo), undefined without one. */
+export function currentInputType(dump: string): number | undefined {
+  const m = /curEditorInfo:\s*\n\s*inputType=0x([0-9a-f]+)/i.exec(dump)
+  return m ? parseInt(m[1]!, 16) : undefined
+}
+
+/** A text field with the URI variation, as Chrome's URL bar reports itself (0x80011 in round 2). */
+export function isUrlField(inputType: number | undefined): boolean {
+  return inputType !== undefined && (inputType & 0xf) === 1 && (inputType & 0xff0) === 0x10
 }

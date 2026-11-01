@@ -24,7 +24,10 @@ import {
   layoutTiles,
   LATIN_IME,
   originFromTap,
-  originFromWindow,
+  originFromScreen,
+  omniboxOpen,
+  currentInputType,
+  isUrlField,
   pickRow,
   roleKey,
   statusBarHeight,
@@ -34,6 +37,7 @@ import {
   subtypeTokens,
 } from '../lib/gboard.ts'
 import {parseXml, switchRow} from '../lib/hierarchy.ts'
+import {safePath} from '../lib/util.ts'
 
 const fixture = (name: string) => readFileSync(new URL(`fixtures/${name}`, import.meta.url), 'utf8')
 const nodes = (name: string) => gboardNodes(fixture(name))
@@ -190,11 +194,33 @@ test('the calibration tap gives the origin back, panned or not', () => {
   assert.deepEqual(originFromTap([864, 1060], {x: 329.1428, y: 299.0476}, panned), {left: 0, top: 275})
 })
 
-test('without a tap, window metrics and the status bar estimate the origin', () => {
-  const bar = statusBarHeight(fixture('en-keyboard.xml'))
-  assert.equal(bar, 128)
-  // Chrome's toolbar is 147px (128..275) on the 2.625 dpr pixel_6: 56 CSS px between outer and inner height.
-  assert.deepEqual(originFromWindow({dpr: 2.625, innerHeight: 474, outerHeight: 530, screenHeight: 914}, bar!), {left: 0, top: 275})
+test('the origin estimate: WebView when visible, else the toolbar, else status bar plus 56dp', () => {
+  assert.equal(statusBarHeight(fixture('en-keyboard.xml')), 128)
+  assert.deepEqual(originFromScreen(fixture('en-keyboard.xml'), 2.625), {origin: {left: 0, top: 275}, source: 'webview'})
+  // Round 2 after a relaunch: the omnibox covers the page, so no WebView, but the toolbar is there.
+  assert.deepEqual(originFromScreen(fixture('r2-omnibox.xml'), 2.625), {origin: {left: 0, top: 275}, source: 'toolbar'})
+  // Round 1's promo hides both. 128 + 56dp x 2.625 = 275.
+  assert.deepEqual(originFromScreen(fixture('r1-chrome-promo.xml'), 2.625), {origin: {left: 0, top: 275}, source: 'statusbar'})
+})
+
+test('after a relaunch the omnibox was open and Gboard typed into the URL bar', () => {
+  assert.ok(omniboxOpen(fixture('r2-omnibox.xml')))
+  assert.ok(!omniboxOpen(fixture('en-keyboard.xml')))
+  // Gboard's onStartInput in round 2 logcat: inputType=80011, Uri[NoSuggestion].
+  assert.ok(isUrlField(0x80011))
+  assert.ok(!isUrlField(0x0), 'no field')
+  assert.ok(!isUrlField(0xa0001), 'a contenteditable: text, multi-line, auto-correct')
+  assert.ok(!isUrlField(undefined))
+  assert.equal(currentInputType(readFileSync(new URL('fixtures/r2-ims-editorinfo.txt', import.meta.url), 'utf8')), 0)
+  assert.equal(currentInputType('      curEditorInfo:\n        inputType=0x80011 imeOptions=0x2000002'), 0x80011)
+  assert.equal(currentInputType('nothing'), undefined)
+})
+
+test('dump names are safe for artifact upload', () => {
+  assert.equal(safePath('out/probe-zh-en-emoji-5-panel?.xml'), 'out/probe-zh-en-emoji-5-panel_.xml')
+  assert.equal(safePath('out/keyboard-zh.xml'), 'out/keyboard-zh.xml')
+  assert.equal(safePath('a/b c/d:e*f"g<h>i|j.xml'), 'a/b c/d_e_f_g_h_i_j.xml', 'only the file name changes')
+  assert.equal(safePath('plain'), 'plain')
 })
 
 test('the run 1 notifications promo hides the WebView, which is why geometry no longer reads it', () => {

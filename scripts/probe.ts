@@ -25,11 +25,13 @@ import {
   LANGS,
   LATIN_IME,
   onLayout,
+  currentInputType,
+  isUrlField,
+  omniboxOpen,
+  originFromScreen,
   originFromTap,
-  originFromWindow,
   pickEmoji,
   roleKey,
-  statusBarHeight,
   subtypeHashFromLog,
   subtypeLocale,
   type GNode,
@@ -37,11 +39,15 @@ import {
   type Origin,
   type Role,
   type Viewport,
-  type WindowMetrics,
 } from './lib/gboard.ts'
 import {charsPerPixel, chromePid, cursorControlFromLog, evidence, hasWord, type DragSample, type Selection, type Step} from './lib/probe-logic.ts'
 import {Device} from './lib/u2.ts'
-import {errorRepr, phase, pyRepr, sleep} from './lib/util.ts'
+import {errorRepr, phase, pyRepr, safePath, sleep} from './lib/util.ts'
+
+/** writeFileSync with the file name made safe for artifact upload. */
+function writeFile(path: string, data: string): void {
+  writeFileSync(safePath(path), data)
+}
 
 const CHROME = 'com.android.chrome'
 const PORT = 8765
@@ -91,7 +97,9 @@ async function dismissChromeScreens(d: Device): Promise<string[]> {
 
 let lastPid: number | undefined
 
-async function launchChrome(d: Device): Promise<void> {
+async function launchChrome(d: Device, fresh = false): Promise<void> {
+  // A relaunch starts from a stopped Chrome, so no half-restored tab or open omnibox carries over.
+  if (fresh) await adbOutput(['shell', 'am', 'force-stop', CHROME])
   await adb(['forward', `tcp:${CDP_PORT}`, 'localabstract:chrome_devtools_remote'])
   await adb(['shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', URL_, CHROME])
   await sleep(4)
@@ -112,7 +120,7 @@ async function ensureChrome(d: Device): Promise<number | undefined> {
   if (pid !== undefined && pid === lastPid) return undefined
   phase(`chrome pid ${lastPid} -> ${pid}, relaunching`)
   const before = lastPid
-  await launchChrome(d)
+  await launchChrome(d, true)
   return before
 }
 
@@ -155,18 +163,13 @@ const MIDDLE_GRAPHEME_JS = `(() => { ${OFFSET_JS}
 })()`
 
 const FIELD_JS = `(() => { const el = document.querySelector('[contenteditable]'); el.style.minHeight = '30vh'; const b = el.getBoundingClientRect();
-  return {x: b.left + b.width / 2, y: b.top + Math.min(b.height / 2, 40), viewport: ${VIEWPORT_JS}} })()`
+  return {x: b.left + b.width / 2, y: b.top + b.height * 0.6, viewport: ${VIEWPORT_JS}} })()`
 
 // Records where the page saw the last pointer land, for the calibration tap. Capture phase, so the editor
 // cannot stop it.
 const POINTER_HOOK_JS = `(() => { if (!window.__pointer) { window.__pointer = null;
   document.addEventListener('pointerdown', (e) => { window.__pointer = {x: e.clientX, y: e.clientY, sx: e.screenX, sy: e.screenY} }, true) }
   window.__pointer = null; return true })()`
-
-// A point on the page below the editor and the event log, inside the viewport and away from any text.
-const CALIBRATION_POINT_JS = `(() => { const el = document.querySelector('[contenteditable]'); const b = el.getBoundingClientRect();
-  return {x: Math.round(innerWidth * 0.8), y: Math.round(Math.min(innerHeight - 20, b.bottom + 30)), viewport: ${VIEWPORT_JS},
-    metrics: {dpr: devicePixelRatio, innerHeight, outerHeight, screenHeight: screen.height}} })()`
 
 async function pageStep(step: string, extra: Record<string, unknown> = {}): Promise<Step> {
   checkDeadline()
@@ -187,44 +190,43 @@ async function waitForPage(): Promise<void> {
   throw new Error('page never loaded over CDP')
 }
 
-// Where the page's CSS (0, 0) sits on screen. Found once per Chrome launch, from a calibration tap.
+// Where the page's CSS (0, 0) sits on screen, and how it was found. Reset on every Chrome launch.
 let origin: Origin | undefined
 let originSource = ''
 
-/**
- * Find the content origin without the accessibility tree. Round 1 read it from the WebView node, which
- * vanishes whenever a Chrome dialog (the notifications promo) covers the page. Tap a blank point of the
- * page and read back where the page saw it; if the tap does not reach the page, estimate from window
- * metrics and the status bar.
- */
-async function calibrate(d: Device): Promise<Origin> {
+/** The origin to tap with: the confirmed one, or a fresh estimate from the screen. */
+async function currentOrigin(d: Device): Promise<Origin> {
   if (origin) return origin
-  const p = (await cdpEval(CALIBRATION_POINT_JS)) as {x: number; y: number; viewport: Viewport; metrics: WindowMetrics}
-  const bar = statusBarHeight(await d.dumpHierarchy()) ?? 0
-  const guess = originFromWindow(p.metrics, bar)
-  const at = cssToScreen(p.x, p.y, guess, p.viewport)
+  const dpr = (await cdpEval('devicePixelRatio')) as number
+  const estimate = originFromScreen(await d.dumpHierarchy(), dpr)
+  phase(`origin estimate ${pyRepr(estimate.origin)} from ${estimate.source}`)
+  return estimate.origin
+}
+
+async function toScreen(d: Device, x: number, y: number, viewport: Viewport): Promise<[number, number]> {
+  return cssToScreen(x, y, await currentOrigin(d), viewport)
+}
+
+/**
+ * Tap the editor and read back where the page saw the pointer, which confirms (or corrects) the origin
+ * without the accessibility tree. Returns whether the tap reached the page at all.
+ */
+async function tapEditor(d: Device): Promise<boolean> {
   await cdpEval(POINTER_HOOK_JS)
+  const field = (await cdpEval(FIELD_JS)) as {x: number; y: number; viewport: Viewport}
+  const at = await toScreen(d, field.x, field.y, field.viewport)
   await d.click(...at)
   await sleep(0.6)
   const seen = (await cdpEval('window.__pointer')) as {x: number; y: number} | null
   if (seen) {
-    origin = originFromTap(at, seen, p.viewport)
+    const measured = originFromTap(at, seen, field.viewport)
+    if (!origin || measured.top !== origin.top || measured.left !== origin.left) phase(`origin ${pyRepr(measured)} from tap at ${at} (page saw ${pyRepr(seen)})`)
+    origin = measured
     originSource = 'tap'
   } else {
-    origin = guess
-    originSource = 'window'
+    phase(`tap at ${at} did not reach the page`)
   }
-  phase(`origin ${pyRepr(origin)} from ${originSource} (window guess ${pyRepr(guess)}, status bar ${bar}, tapped ${at}, page saw ${pyRepr(seen)})`)
-  return origin
-}
-
-async function toScreen(d: Device, x: number, y: number, viewport: Viewport): Promise<[number, number]> {
-  return cssToScreen(x, y, await calibrate(d), viewport)
-}
-
-async function imeShown(): Promise<boolean> {
-  const ims = await adb(['shell', 'dumpsys', 'input_method'])
-  return ims.includes('mInputShown=true') || ims.includes('mIsInputViewShown=true')
+  return seen !== null
 }
 
 /** Reload the editor to one empty block, tap it and wait for Gboard. Returns notes on what it had to fix. */
@@ -242,19 +244,39 @@ async function freshEditor(d: Device): Promise<Record<string, unknown>> {
     await adb(['shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', URL_, CHROME])
     await sleep(3)
   }
-  await calibrate(d)
+  if (omniboxOpen(await d.dumpHierarchy())) {
+    phase('omnibox open before the editor tap, closing it')
+    notes.omnibox_closed = 1
+    await adbOutput(['shell', 'input', 'keyevent', 'KEYCODE_BACK'])
+    await sleep(0.8)
+  }
   for (let attempt = 0; attempt < 4; attempt++) {
-    const field = (await cdpEval(FIELD_JS)) as {x: number; y: number; viewport: Viewport}
-    await d.click(...(await toScreen(d, field.x, field.y, field.viewport)))
+    const reached = await tapEditor(d)
     for (let i = 0; i < 6; i++) {
+      const ims = await adb(['shell', 'dumpsys', 'input_method'])
+      const shown = ims.includes('mInputShown=true') || ims.includes('mIsInputViewShown=true')
       // The keyboard can linger from before the reload, so the editor must hold focus too.
-      if ((await imeShown()) && (await cdpEval('!!document.activeElement?.isContentEditable'))) {
+      if (shown && (await cdpEval('!!document.activeElement?.isContentEditable'))) {
         await sleep(0.8)
+        if (attempt) notes.editor_taps = attempt + 1
         return notes
+      }
+      // Round 2: after a relaunch the tap opened Chrome's URL bar, Gboard came up for it, and every later
+      // tap went into the omnibox. Close it and tap again.
+      if (isUrlField(currentInputType(ims)) || omniboxOpen(await d.dumpHierarchy())) {
+        phase('the tap opened the omnibox, closing it')
+        notes.omnibox_closed = ((notes.omnibox_closed as number | undefined) ?? 0) + 1
+        await adbOutput(['shell', 'input', 'keyevent', 'KEYCODE_BACK'])
+        await sleep(0.5)
+        if (omniboxOpen(await d.dumpHierarchy())) await adbOutput(['shell', 'input', 'keyevent', 'KEYCODE_BACK'])
+        await sleep(0.8)
+        // Its estimate was wrong, so measure again from the next tap.
+        if (!reached) origin = undefined
+        break
       }
       await sleep(1)
     }
-    phase(`keyboard not shown or editor not focused after tap ${attempt + 1}`)
+    phase(`keyboard not shown or editor not focused after tap ${attempt + 1} (reached page ${reached})`)
     // A dialog that came up since may be covering the page.
     await dismissChromeScreens(d)
   }
@@ -403,13 +425,13 @@ async function ensureLayout(d: Device, out: string, target: string): Promise<Rec
     phase(`layout via ${pyRepr(tap.label)}: subtype ${state.locale} hash ${state.hash}, keys ${state.layout}`)
     if (onLayout(target, state.locale, state.layout)) return done('globe', state)
   }
-  writeFileSync(`${out}/keyboard-${target}-missing.xml`, await d.dumpHierarchy())
+  writeFile(`${out}/keyboard-${target}-missing.xml`, await d.dumpHierarchy())
   throw new Error(`could not switch Gboard to ${target}: ${tried.join(' | ')}`)
 
   async function done(by: string, s: LayoutState): Promise<Record<string, unknown>> {
     phase(`layout ${target} active via ${by} (subtype ${s.locale}, keys ${s.layout})`)
     if (!existsSync(`${out}/keyboard-${target}.xml`)) {
-      writeFileSync(`${out}/keyboard-${target}.xml`, await d.dumpHierarchy())
+      writeFile(`${out}/keyboard-${target}.xml`, await d.dumpHierarchy())
       await d.screenshot(`${out}/keyboard-${target}`)
     }
     return {switched_by: by, subtype: s.locale, tried}
@@ -561,7 +583,7 @@ const ACTIONS: Record<string, (ctx: Ctx) => Promise<void>> = {
         nodes = await emojiPanel(ctx.d)
       }
     }
-    writeFileSync(`${ctx.base}-emoji.xml`, await ctx.d.dumpHierarchy())
+    writeFile(`${ctx.base}-emoji.xml`, await ctx.d.dumpHierarchy())
     const pick = pickEmoji(nodes)
     if (!pick) throw new Error(`no emoji cell in the panel; labels ${pyRepr(labels(nodes))}`)
     await record(ctx, 'panel', {labels: labels(nodes)})
@@ -587,10 +609,10 @@ async function openEmoji(ctx: Ctx): Promise<string> {
   let n = 0
   const dump = async (how: string): Promise<GNode[]> => {
     const xml = await d.dumpHierarchy()
-    writeFileSync(`${ctx.base}-emoji-${++n}-${how}.xml`, xml)
+    writeFile(`${ctx.base}-emoji-${++n}-${how}.xml`, xml)
     return gboardNodes(xml)
   }
-  const opened = async (): Promise<boolean> => pickEmoji(await dump('panel?')) !== undefined
+  const opened = async (): Promise<boolean> => pickEmoji(await dump('panel-check')) !== undefined
   const nodes = await keys(d)
   const key = roleKey(nodes, 'emoji')
   if (key) {
@@ -692,7 +714,7 @@ async function runAction(d: Device, out: string, langCode: string, layout: strin
     await sleep(2)
     deadline = Infinity
     try {
-      writeFileSync(`${base}-fail.xml`, await d.dumpHierarchy())
+      writeFile(`${base}-fail.xml`, await d.dumpHierarchy())
     } catch {}
   }
   try {
@@ -727,7 +749,7 @@ async function main(): Promise<void> {
   for (const layout of layouts) {
     for (const action of Object.keys(ACTIONS)) {
       results.push(await runAction(d, out, langCode, layout, action, cursorControl))
-      writeFileSync(`${out}/probe-${langCode}.json`, JSON.stringify({lang: langCode, gboard: GBOARD, cursorControl, origin, originSource, subtypeHashes, results}, null, 2))
+      writeFile(`${out}/probe-${langCode}.json`, JSON.stringify({lang: langCode, gboard: GBOARD, cursorControl, origin, originSource, subtypeHashes, results}, null, 2))
     }
   }
   const counts = results.reduce<Record<string, number>>((c, r) => ({...c, [r.status]: (c[r.status] ?? 0) + 1}), {})

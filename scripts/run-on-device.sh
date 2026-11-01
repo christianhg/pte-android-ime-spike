@@ -20,6 +20,16 @@ for i in $(seq 1 48); do
   sleep 5
 done
 log "settle done after $((i * 5))s quiet=$quiet"
+# Probe jobs: stop the Play Store before its auto-update job runs. In every round 2 job it updated Google
+# Play services 1.5 to 4 min after this point, and the new container made Play services restart every
+# process with a Dynamite module loaded, Chrome included, which killed Chrome mid-probe. It had Chrome and
+# Gboard queued as well. Gboard's language packs come through its own downloader, not the Play Store.
+if [ -n "${PROBE_LANG:-}" ]; then
+  a shell am force-stop com.android.vending
+  log "play store disable: $(timeout 30 adb shell pm disable-user --user 0 com.android.vending 2>&1 | tr '\n' ' ')"
+  vending_disabled=$(timeout 30 adb shell pm list packages -d 2>/dev/null | tr -d '\r' | grep -c '^package:com.android.vending$')
+  log "play store disabled=$vending_disabled"
+fi
 log "diagnose start"
 timeout 120 scripts/diagnose.sh "$out" || log "diagnose rc=$?"
 
@@ -57,21 +67,25 @@ if [ -n "${PROBE_LANG:-}" ]; then
   log "probe setup $PROBE_LANG"
   timeout -k 10 360 node scripts/setup-lang.ts "$PROBE_LANG" "$out" 2>&1 | tee -a "$out/setup.log"
   log "probe setup rc=${PIPESTATUS[0]}"
-  # Play services updates its Dynamite modules a few minutes after boot and force-restarts every process
-  # that loaded one, Chrome included ("Module config changed, forcing restart due to module
-  # googlecertificates"). Wait until none has come for 60s (max 4 min). probe.ts relaunches Chrome if a
-  # late one still lands.
-  log "dynamite settle start"
-  # Count the restarts in the background capture rather than clearing the device log under it.
-  quiet=0
-  seen=$(grep -c "forcing restart due to module" "$out/logcat.txt")
-  for i in $(seq 1 48); do
-    now=$(grep -c "forcing restart due to module" "$out/logcat.txt")
-    if [ "$now" -gt "$seen" ]; then quiet=0; seen=$now; else quiet=$((quiet + 5)); fi
-    [ $quiet -ge 60 ] && break
+  # If the Play Store could not be disabled, or had already scheduled the Play services update, wait for
+  # that update to land before Chrome starts: the restart follows its INSTALLED line within ~1s
+  # (round 2: 0.2 to 1.1s in all 10 jobs). Max 6 min, then go on and let probe.ts relaunch Chrome.
+  gms_update='Package:com.google.android.gms.*state:'
+  # The capture in $out/logcat.txt started after a clear, so count from it and from the device log both.
+  gms() { { cat "$out/logcat.txt"; timeout 20 adb logcat -d 2>/dev/null; } | grep -c "${gms_update}$1"; }
+  log "gms update wait start: scheduled=$(gms SCHEDULED) installed=$(gms INSTALLED)"
+  # With the Play Store disabled, nothing new gets scheduled, so only an update already under way counts.
+  # Otherwise one is still coming (round 2 scheduled it 1.5 to 4 min after boot), so wait for it too.
+  for i in $(seq 1 72); do
+    if [ "${vending_disabled:-0}" -ge 1 ] && [ "$(gms SCHEDULED)" -eq 0 ]; then break; fi
+    if [ "$(gms INSTALLED)" -gt 0 ]; then
+      # The restart lines follow the install within ~1s. Give the second split install and its restarts 20s.
+      sleep 20
+      break
+    fi
     sleep 5
   done
-  log "dynamite settle done after $((i * 5))s quiet=$quiet restarts=$seen"
+  log "gms update wait done after $((i * 5))s: scheduled=$(gms SCHEDULED) installed=$(gms INSTALLED) restarts=$(grep -c 'forcing restart due to module' "$out/logcat.txt")"
   log "probe $PROBE_LANG"
   timeout -k 10 1500 node scripts/probe.ts "$PROBE_LANG" "$out" 2>&1 | tee -a "$out/probe.log"
   rc=${PIPESTATUS[0]}

@@ -10,7 +10,12 @@ import {adbOutput, adbPassthrough} from './lib/adb.ts'
 import {downloadStates, enabledLocales, enabledSubtypes, GBOARD, LANGS, LATIN_IME, layoutTiles, localeMatches, pickRow, subtypesLine, type Lang} from './lib/gboard.ts'
 import {center, parseBounds, parseXml, switchRow} from './lib/hierarchy.ts'
 import {Device, type UiObject} from './lib/u2.ts'
-import {sleep} from './lib/util.ts'
+import {safePath, sleep} from './lib/util.ts'
+
+/** writeFileSync with the file name made safe for artifact upload. */
+function writeFile(path: string, data: string): void {
+  writeFileSync(safePath(path), data)
+}
 
 const [code, out] = process.argv.slice(2) as [string, string]
 let step = 0
@@ -23,7 +28,7 @@ async function snap(d: Device, name: string): Promise<string> {
   step += 1
   const base = `${out}/${code}-setup-${String(step).padStart(2, '0')}-${name}`
   const xml = await d.dumpHierarchy()
-  writeFileSync(`${base}.xml`, xml)
+  writeFile(`${base}.xml`, xml)
   await d.screenshot(base)
   const downloads = downloadStates(xml)
   log(`step ${step} ${name}${downloads.length ? ` download=${JSON.stringify(downloads)}` : ''}`)
@@ -223,7 +228,7 @@ async function main(): Promise<void> {
   await enableCursorControl(d)
 
   const ims = await adbOutput(['shell', 'dumpsys', 'input_method'])
-  writeFileSync(`${out}/${code}-ims.txt`, ims)
+  writeFile(`${out}/${code}-ims.txt`, ims)
   const enabled = await adbOutput(['shell', 'settings', 'get', 'secure', 'enabled_input_methods'])
   const subtypes = enabledLocales(enabled, ims)
   log(`enabled gboard subtypes ${JSON.stringify(enabledSubtypes(enabled, LATIN_IME))} raw=${enabled.trim()}`)

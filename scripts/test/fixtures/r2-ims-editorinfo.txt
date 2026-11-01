@@ -1,0 +1,7 @@
+      isVisibleBound=false
+      boundToMethod=true
+      curClient=ClientState{9536dbd mUid=10159 mPid=4989 mSelfReportedDisplayId=0}
+      curEditorInfo:
+        inputType=0x0 imeOptions=0x0 privateImeOptions=null
+        actionLabel=null actionId=0
+        initialSelStart=-1 initialSelEnd=-1 initialToolType=0 initialCapsMode=0x0
