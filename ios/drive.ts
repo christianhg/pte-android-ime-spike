@@ -211,8 +211,43 @@ try {
     const webView = browser.$('(//XCUIElementTypeWebView)[1]')
     const wv = await browser.getElementRect(await webView.elementId)
     if (box) {
-      await browser.execute('mobile: doubleTap', {x: wv.x + box.x, y: wv.y + box.y})
+      // mobile: doubleTap arrived as two single taps (the caret moved to a word edge), so send one
+      // fast pointer sequence instead, and fall back to touch-and-hold plus the Select menu item.
+      const x = Math.round(wv.x + box.x)
+      const y = Math.round(wv.y + box.y)
+      await browser.performActions([
+        {
+          type: 'pointer',
+          id: 'finger',
+          parameters: {pointerType: 'touch'},
+          actions: [
+            {type: 'pointerMove', duration: 0, x, y},
+            {type: 'pointerDown', button: 0},
+            {type: 'pause', duration: 40},
+            {type: 'pointerUp', button: 0},
+            {type: 'pause', duration: 80},
+            {type: 'pointerDown', button: 0},
+            {type: 'pause', duration: 40},
+            {type: 'pointerUp', button: 0},
+          ],
+        },
+      ])
+      await browser.releaseActions()
       await browser.pause(800)
+      await web()
+      actions.selectBy = 'double-tap'
+      if (!(await browser.execute(() => getSelection()?.toString()))) {
+        await native()
+        await browser.execute('mobile: touchAndHold', {x, y, duration: 1.0})
+        await browser.pause(800)
+        const select = browser.$('-ios predicate string:(label == "Select" OR name == "Select") AND (type == "XCUIElementTypeMenuItem" OR type == "XCUIElementTypeButton")')
+        if (await select.isExisting()) {
+          await select.click()
+          await browser.pause(800)
+          actions.selectBy = 'hold then Select'
+        } else actions.selectBy = 'hold, no Select item'
+      }
+      await native()
     }
     actions.selectBox = box
     await snapshot('long-press')
