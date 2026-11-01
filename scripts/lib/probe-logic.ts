@@ -48,28 +48,55 @@ export function hasWord(text: string | null, expect: string): boolean {
   return (text ?? '').normalize('NFC').toLowerCase().includes(expect.normalize('NFC').toLowerCase())
 }
 
+const GRAPHEMES = new Intl.Segmenter(undefined, {granularity: 'grapheme'})
+
+/**
+ * The grapheme cluster index of a caret at UTF-16 `offset` in `text`: how many whole clusters lie before
+ * it. Every caret position and every move the probe checks goes through this, never through code units.
+ * Round 5's Hindi drag moved the caret over नमस्ते + space from offset 7 to 2: two clusters (the space and
+ * स्ते), which a code unit count called five.
+ */
+export function graphemeIndex(text: string, offset: number): number {
+  let n = 0
+  for (const g of GRAPHEMES.segment(text)) {
+    if (g.index >= offset) break
+    n += 1
+  }
+  return n
+}
+
+/** Clusters the caret moved back from `from` to `to` (UTF-16 offsets in `text`). Negative is forward. */
+export function caretMove(text: string, from: number, to: number): number {
+  return graphemeIndex(text, from) - graphemeIndex(text, to)
+}
+
+/** The number of grapheme clusters in `text`, as a person counts characters. */
+export function graphemeCount(text: string): number {
+  return graphemeIndex(text, text.length)
+}
+
 export type DragSample = {px: number; focus: number}
 
 /**
- * Characters per pixel of space bar drag, from samples of total drag distance and caret offset taken
- * during one drag. The caret stops at offset 0, so only samples before it got there count. Null when the
- * caret never moved or hit 0 at once.
+ * Characters (grapheme clusters) per pixel of space bar drag, from samples of total drag distance and
+ * caret offset taken during one drag over `text`. The caret stops at offset 0, so only samples before it
+ * got there count. Null when the caret never moved or hit 0 at once.
  */
-export function charsPerPixel(start: number, samples: DragSample[]): number | null {
+export function charsPerPixel(text: string, start: number, samples: DragSample[]): number | null {
   const useful = samples.filter((s) => s.focus > 0 && s.focus < start)
   if (!useful.length) return null
   // Least squares through the origin: moved = k * px.
-  const num = useful.reduce((a, s) => a + s.px * (start - s.focus), 0)
+  const num = useful.reduce((a, s) => a + s.px * caretMove(text, start, s.focus), 0)
   const den = useful.reduce((a, s) => a + s.px * s.px, 0)
   return num / den
 }
 
 /**
- * The pixel distance at which the caret first moved `chars` characters, read off calibration samples.
+ * The pixel distance at which the caret first moved `chars` clusters, read off calibration samples.
  * Falls back to chars / k when no sample moved that far.
  */
-export function dragDistance(chars: number, start: number, samples: DragSample[], k: number | null): number | null {
-  const hit = samples.find((s) => start - s.focus >= chars)
+export function dragDistance(text: string, chars: number, start: number, samples: DragSample[], k: number | null): number | null {
+  const hit = samples.find((s) => caretMove(text, start, s.focus) >= chars)
   if (hit) return hit.px
   return k ? Math.round(chars / k) : null
 }

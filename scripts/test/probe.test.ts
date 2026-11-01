@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import {existsSync, readFileSync} from 'node:fs'
 import {test} from 'node:test'
 import {probeLine} from '../probe.ts'
-import {charsPerPixel, chromePid, cursorControlFromLog, dragDistance, dragSign, evidence, hasWord, pageInfo, pageUrl, PAGES, parsePages, textDirection, type Step} from '../lib/probe-logic.ts'
+import {caretMove, charsPerPixel, chromePid, cursorControlFromLog, dragDistance, dragSign, evidence, graphemeCount, graphemeIndex, hasWord, pageInfo, pageUrl, PAGES, parsePages, textDirection, type Step} from '../lib/probe-logic.ts'
 import {
   charKey,
   classifyLayout,
@@ -299,12 +299,12 @@ test('evidence counts only the action own events and spots composition', () => {
 test('space drag calibration: characters per pixel before the caret hits 0, and the distance for N', () => {
   // Round 1, th-2: three key widths (321px) took the caret from 5 to 0. Samples like these give ~1 char / 40px.
   const samples = [{px: 6, focus: 5}, {px: 30, focus: 5}, {px: 42, focus: 4}, {px: 84, focus: 3}, {px: 120, focus: 2}, {px: 400, focus: 0}]
-  const k = charsPerPixel(5, samples)!
+  const k = charsPerPixel('Kyou ', 5, samples)!
   assert.ok(Math.abs(k - 0.0246) < 0.001, String(k))
-  assert.equal(dragDistance(3, 5, samples, k), 120)
-  assert.equal(dragDistance(4, 5, samples.slice(0, 5), k), Math.round(4 / k))
-  assert.equal(charsPerPixel(5, [{px: 6, focus: 5}, {px: 12, focus: 0}]), null, 'jumped straight to 0')
-  assert.equal(charsPerPixel(5, []), null)
+  assert.equal(dragDistance('Kyou ', 3, 5, samples, k), 120)
+  assert.equal(dragDistance('Kyou ', 4, 5, samples.slice(0, 5), k), Math.round(4 / k))
+  assert.equal(charsPerPixel('Kyou ', 5, [{px: 6, focus: 5}, {px: 12, focus: 0}]), null, 'jumped straight to 0')
+  assert.equal(charsPerPixel('Kyou ', 5, []), null)
 })
 
 test('chromePid reads pidof, which is empty once Chrome is gone', () => {
@@ -460,3 +460,28 @@ test('pages: the editor page and the plain control, with the editor version only
   // Both pages exist in the page build, which copies src/*.html.
   for (const {file} of Object.values(PAGES)) assert.ok(existsSync(new URL(`../../page/src/${file}`, import.meta.url)), file)
 })
+
+// Round 5, hi-1 editor page: the drag samples over "नमस्ते " (7 code units, 4 grapheme clusters).
+const HINDI = 'नमस्ते '
+const HINDI_DRAG = [{px: 54, focus: 7}, {px: 60, focus: 7}, {px: 66, focus: 6}, {px: 72, focus: 6}, {px: 234, focus: 6}, {px: 240, focus: 2}]
+
+test('caret moves count grapheme clusters, not code units (Hindi drag, round 5)', () => {
+  assert.equal(graphemeCount(HINDI), 4, 'न म स्ते and the space')
+  assert.deepEqual([0, 1, 2, 6, 7].map((o) => graphemeIndex(HINDI, o)), [0, 1, 2, 3, 4])
+  // Round 5 reported "moved 5 characters, wanted 3": the caret went 7 -> 2, which is two characters.
+  assert.equal(caretMove(HINDI, 7, 2), 2)
+  assert.equal(caretMove(HINDI, 7, 6), 1)
+  // The sample that ended the drag was the first to reach 2 clusters, not 3, so the drag goes on.
+  assert.equal(dragDistance(HINDI, 3, 7, HINDI_DRAG, null), null)
+  assert.equal(dragDistance(HINDI, 2, 7, HINDI_DRAG, null), 240)
+  const k = charsPerPixel(HINDI, 7, HINDI_DRAG)!
+  // Least squares over the moved samples: one cluster at 66, 72 and 234 px, two at 240 px.
+  // (66 + 72 + 234 + 2 * 240) / (66² + 72² + 234² + 240²) = 852 / 121896.
+  assert.ok(Math.abs(k - 852 / 121896) < 1e-12, String(k))
+  // Latin text counts the same either way, so English results do not change.
+  assert.equal(caretMove('Kyou ', 5, 2), 3)
+  assert.equal(caretMove('Tiếng ', 6, 3), 3, 'precomposed Vietnamese')
+  assert.equal(caretMove('Tie\u0302\u0301ng ', 8, 3), 3, 'decomposed Vietnamese: one cluster per letter')
+  assert.equal(caretMove(HINDI, 2, 7), -2, 'forward is negative')
+})
+

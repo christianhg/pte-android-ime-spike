@@ -43,7 +43,7 @@ import {
   type Role,
   type Viewport,
 } from './lib/gboard.ts'
-import {charsPerPixel, chromePid, cursorControlFromLog, dragSign, evidence, hasWord, pageInfo, pageUrl, parsePages, type DragSample, type Selection, type Step} from './lib/probe-logic.ts'
+import {caretMove, charsPerPixel, chromePid, cursorControlFromLog, dragSign, evidence, graphemeIndex, hasWord, pageInfo, pageUrl, parsePages, type DragSample, type Selection, type Step} from './lib/probe-logic.ts'
 import {Device} from './lib/u2.ts'
 import {errorRepr, phase, pyRepr, safePath, sleep} from './lib/util.ts'
 
@@ -498,7 +498,7 @@ const DRAG_FAST_PX = 12
  * One space bar drag with the finger held down: a fast start, then DRAG_STEP_PX steps with the caret read
  * after each, until it moved DRAG_CHARS back or the selection left the editor.
  */
-async function dragSpace(ctx: Ctx, space: GNode, start: number, initialSign: -1 | 1): Promise<{samples: DragSample[]; px: number}> {
+async function dragSpace(ctx: Ctx, space: GNode, text: string, start: number, initialSign: -1 | 1): Promise<{samples: DragSample[]; px: number}> {
   let sign = initialSign
   ctx.notes.drag_direction = sign < 0 ? 'left' : 'right'
   const samples: DragSample[] = []
@@ -519,9 +519,9 @@ async function dragSpace(ctx: Ctx, space: GNode, start: number, initialSign: -1 
         break
       }
       samples.push({px, focus: sel.focus})
-      if (start - sel.focus >= DRAG_CHARS) break
+      if (caretMove(text, start, sel.focus) >= DRAG_CHARS) break
       // Moving forward means this build maps the drag the other way. Turn round once, from where we are.
-      if (sel.focus > start && !reversed) {
+      if (caretMove(text, start, sel.focus) < 0 && !reversed) {
         reversed = true
         sign = -sign as -1 | 1
         ctx.notes.drag_direction = `${ctx.notes.drag_direction} then reversed`
@@ -576,11 +576,12 @@ const ACTIONS: Record<string, (ctx: Ctx) => Promise<void>> = {
     const space = roleKey(await keys(ctx.d), 'space')
     if (!space) throw new Error('no space key')
     const start = ctx.steps.at(-1)!.selection.focus
-    if (start === undefined || start < DRAG_CHARS) throw new Error(`caret at ${start}, too close to the start to move ${DRAG_CHARS}`)
+    const text = ctx.steps.at(-1)!.text ?? ''
+    if (start === undefined || graphemeIndex(text, start) < DRAG_CHARS) throw new Error(`caret at ${start}, too close to the start to move ${DRAG_CHARS} characters`)
     // Back through the text is left in ltr and right in rtl. Round 3 dragged Hebrew left, which moves the
     // caret towards the end it already sat at, so it never moved, and the selection then left the editor.
-    const first = dragSign(ctx.steps.at(-1)!.text ?? '')
-    let result = await dragSpace(ctx, space, start, first)
+    const first = dragSign(text)
+    let result = await dragSpace(ctx, space, text, start, first)
     // Round 4: in 7 drags the touch sat still long enough to count as a long-press on Space, Gboard opened
     // its language picker, and the caret never moved. Close it and drag once more.
     if (languagePickerOpen(await ctx.d.dumpHierarchy())) {
@@ -588,7 +589,7 @@ const ACTIONS: Record<string, (ctx: Ctx) => Promise<void>> = {
       writeFile(`${ctx.base}-language-picker.xml`, await ctx.d.dumpHierarchy())
       await adbOutput(['shell', 'input', 'keyevent', 'KEYCODE_BACK'])
       await sleep(0.8)
-      result = await dragSpace(ctx, space, start, first)
+      result = await dragSpace(ctx, space, text, start, first)
       if (languagePickerOpen(await ctx.d.dumpHierarchy())) {
         await adbOutput(['shell', 'input', 'keyevent', 'KEYCODE_BACK'])
         throw new Error('the space bar drag opened the language picker twice')
@@ -597,9 +598,10 @@ const ACTIONS: Record<string, (ctx: Ctx) => Promise<void>> = {
     const {samples, px} = result
     await sleep(0.5)
     const after = (await record(ctx, 'drag')).selection
-    const k = charsPerPixel(start, samples)
+    const k = charsPerPixel(text, start, samples)
     ctx.notes.drag = {start, samples, chars_per_px: k, px_per_char: k ? 1 / k : null, released_at_px: px}
-    ctx.notes.moved = after.focus === undefined ? null : start - after.focus
+    // In grapheme clusters, the characters a person sees, not UTF-16 code units.
+    ctx.notes.moved = after.focus === undefined ? null : caretMove(text, start, after.focus)
     if (ctx.notes.moved !== DRAG_CHARS) throw new Error(`caret moved ${ctx.notes.moved} characters, wanted ${DRAG_CHARS}, after ${px}px`)
   },
 
