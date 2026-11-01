@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import {readFileSync} from 'node:fs'
 import {test} from 'node:test'
 import {probeLine} from '../probe.ts'
-import {charsPerPixel, chromePid, cursorControlFromLog, dragDistance, evidence, hasWord, type Step} from '../lib/probe-logic.ts'
+import {charsPerPixel, chromePid, cursorControlFromLog, dragDistance, dragSign, evidence, hasWord, textDirection, type Step} from '../lib/probe-logic.ts'
 import {
   charKey,
   classifyLayout,
@@ -29,6 +29,9 @@ import {
   currentInputType,
   isUrlField,
   pickRow,
+  emojiPanelOpen,
+  keyText,
+  scrollBand,
   roleKey,
   statusBarHeight,
   subtypeHashFromLog,
@@ -135,12 +138,14 @@ test('firstCandidate takes the leftmost Han label above the keys and skips the h
 })
 
 test('pickEmoji prefers a ZWJ sequence or a flag and skips keys', () => {
-  const cells = (...labels: string[]) => gboardNodes(dump({desc: 'Delete', id: 'key_pos_del', bounds: '[0,0][1,1]'}, ...labels.map((desc, i) => ({desc, bounds: `[${i},10][${i + 1},11]`}))))
+  // A panel needs a grid of cells, so pad with the ".." cells the dump turns astral emoji into.
+  const pad = Array.from({length: 8}, () => '..')
+  const cells = (...labels: string[]) => gboardNodes(dump({desc: 'Delete', id: 'key_pos_del', bounds: '[0,0][1,1]'}, ...[...labels, ...pad].map((desc, i) => ({desc, bounds: `[${i},10][${i + 1},11]`}))))
   assert.equal(pickEmoji(cells('😀', '👨‍👩‍👧', '🇳🇴'))?.label, '👨‍👩‍👧')
   assert.equal(pickEmoji(cells('😀', '🇳🇴'))?.label, '🇳🇴')
   assert.equal(pickEmoji(cells('Recent', '😀'))?.label, '😀')
   assert.equal(pickEmoji(cells('grinning face', 'flag: Norway'))?.label, 'flag: Norway')
-  assert.equal(pickEmoji(cells('Recent', 'Smileys')), undefined)
+  assert.equal(pickEmoji(cells('Recent', 'Smileys'))?.label, '..', 'a mangled cell when nothing is readable')
 })
 
 test('switchRow reads the switch in a settings row and taps the row', () => {
@@ -326,4 +331,85 @@ test('probe log helpers', () => {
     probeLine('ko', {action: 'word', layout: 'ko', status: 'ok', reason: '', steps: [{step: 'space', text: '한국\xa0', dom: null, selection: {inEditor: true}, events: []}]}),
     "PROBE lang=ko layout=ko action=word status=ok text='한국\\xa0' reason=''",
   )
+})
+
+// Round 3 keyboard dumps (run 41260579991). Each word's keys must resolve on the layout Gboard showed.
+const word = (lang: string, dumpName: string, prevDump?: Record<number, string>) => {
+  const k = nodes(dumpName)
+  const keys = LANGS[lang]!.keys
+  return keys.map((ch, i) => {
+    const pool = prevDump?.[i] ? nodes(prevDump[i]!) : k
+    return charKey(pool, ch, keys[i - 1])?.id
+  })
+}
+
+test('Korean: jamo come from key names (히읗 for ㅎ) and vowel syllables (아 for ㅏ)', () => {
+  assert.deepEqual(word('ko', 'r3-ko-keyboard.xml'), ['key_pos_1_4', 'key_pos_1_7', 'key_pos_1_1', 'key_pos_0_3', 'key_pos_2_6', 'key_pos_0_3'])
+  assert.equal(keyText('쌍비읍'), 'ㅃ')
+  assert.equal(keyText('요'), 'ㅛ')
+  assert.equal(keyText('한'), '한', 'a syllable with a final is not a vowel key')
+})
+
+test('Thai: combining marks are keys labelled with a leading space', () => {
+  assert.deepEqual(word('th', 'r3-th-keyboard.xml'), ['key_pos_2_8', 'key_pos_2_9', 'key_pos_1_5', 'key_pos_2_8', 'key_pos_2_3', 'key_pos_1_6'])
+  assert.equal(keyText(' ั'), 'ั')
+})
+
+test('Hindi: after a consonant the mark keys preview it joined (स् + ZWJ), and still match the mark', () => {
+  // Round 3 failed on the virama right after स. On the dump taken there, the key reads स्‍.
+  assert.equal(charKey(nodes('r3-hi-after-sa.xml'), '्', 'स')?.id, 'key_pos_4_8')
+  assert.equal(charKey(nodes('r3-hi-after-sa.xml'), 'े', 'स')?.id, 'key_pos_0_6')
+  // On the base page the virama has its own key and the consonants are plain.
+  assert.equal(charKey(nodes('r3-hi-keyboard.xml'), '्')?.id, 'key_pos_4_8')
+  assert.equal(charKey(nodes('r3-hi-keyboard.xml'), 'न')?.id, 'key_pos_2_9')
+  assert.equal(keyText('स‌‌‌'), 'स', 'Hindi pads keys with zero width non-joiners')
+  // Without prev a joined preview is not the mark.
+  assert.equal(charKey(nodes('r3-hi-after-sa.xml'), '्'), undefined)
+})
+
+test('German QWERTZ has no ü key, so ü stays on a long-press of u', () => {
+  const k = nodes('r3-de-keyboard.xml')
+  assert.equal(charKey(k, 'ü'), undefined)
+  assert.equal(charKey(k, 'u')?.id, 'key_pos_0_6')
+  assert.equal(classifyLayout(k), 'de')
+  assert.equal(LANGS.de!.longPress?.ü, 'u')
+})
+
+test('the language key is found by id on every localised two-language keyboard', () => {
+  for (const [name, label] of [['r3-ko-keyboard.xml', '다음 언어'], ['r3-th-keyboard.xml', 'ภาษาถัดไป'], ['r3-hi-keyboard.xml', 'अगली भाषा'], ['r3-de-keyboard.xml', 'Nächste Sprache']] as const) {
+    assert.equal(roleKey(nodes(name), 'language')?.label, label, name)
+  }
+  assert.equal(roleKey(nodes('en-keyboard.xml'), 'language'), undefined, 'a one-language keyboard has the emoji key there')
+})
+
+test('emoji panel: found by its grid of cells, which the dump mangles to ".."', () => {
+  const ko = nodes('r3-ko-emoji-panel.xml')
+  assert.ok(emojiPanelOpen(ko))
+  // Its readable cells: ☺️ and a ZWJ sequence with a mangled base, which wins as the multi-code-point case.
+  assert.match(pickEmoji(ko)!.label, /^\.\.\u200d/)
+  assert.equal(roleKey(ko, 'delete')?.id, 'key_pos_del')
+  // English round 3 picked a ZWJ sequence whose emoji base was mangled.
+  assert.match(pickEmoji(nodes('r3-en-emoji-panel.xml'))!.label, /\u200d/)
+  // A keyboard with emoji suggestions in its strip is not the panel.
+  assert.ok(!emojiPanelOpen(nodes('r3-de-emoji-strip.xml')))
+  assert.equal(pickEmoji(nodes('r3-de-emoji-strip.xml')), undefined)
+  assert.ok(!emojiPanelOpen(nodes('r3-de-keyboard.xml')))
+})
+
+test('the language list scrolls above the search keyboard, which round 3 glide-typed into', () => {
+  const band = scrollBand(readFileSync(new URL('fixtures/r3-ar-search-keyboard.xml', import.meta.url), 'utf8'), 2400)
+  const keyboardTop = Math.min(...nodes('r3-ar-search-keyboard.xml').filter((n) => n.id.startsWith('key_pos_')).map((n) => n.bounds.top))
+  assert.ok(band.bottom < keyboardTop, `${band.bottom} < ${keyboardTop}`)
+  assert.ok(band.top < band.bottom - 300, 'a swipe long enough to scroll')
+  assert.deepEqual(scrollBand('<hierarchy><node package="x" bounds="[0,0][1,1]"/></hierarchy>', 2400), {top: 864, bottom: 2040})
+})
+
+test('space drag goes right to move back through rtl text', () => {
+  assert.equal(textDirection('שלום '), 'rtl')
+  assert.equal(textDirection('مرحبا'), 'rtl')
+  assert.equal(textDirection('  Kyou'), 'ltr')
+  assert.equal(textDirection('123 שלום'), 'rtl', 'digits are weak, the first letter decides')
+  assert.equal(textDirection(''), 'ltr')
+  assert.equal(dragSign('שלום '), 1)
+  assert.equal(dragSign('Kyou '), -1)
 })

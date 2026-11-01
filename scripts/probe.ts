@@ -19,6 +19,7 @@ import {
   charKey,
   classifyLayout,
   cssToScreen,
+  emojiPanelOpen,
   firstCandidate,
   GBOARD,
   gboardNodes,
@@ -40,7 +41,7 @@ import {
   type Role,
   type Viewport,
 } from './lib/gboard.ts'
-import {charsPerPixel, chromePid, cursorControlFromLog, evidence, hasWord, type DragSample, type Selection, type Step} from './lib/probe-logic.ts'
+import {charsPerPixel, chromePid, cursorControlFromLog, dragSign, evidence, hasWord, type DragSample, type Selection, type Step} from './lib/probe-logic.ts'
 import {Device} from './lib/u2.ts'
 import {errorRepr, phase, pyRepr, safePath, sleep} from './lib/util.ts'
 
@@ -308,9 +309,10 @@ async function tapRole(d: Device, role: Role): Promise<GNode> {
 const labels = (nodes: GNode[]) => nodes.map((n) => n.label).slice(0, 80)
 
 /** Tap the key for `ch`: on the base layer, under Shift, or in the long-press popup of a base key. */
-async function typeChar(d: Device, lang: Lang, ch: string): Promise<void> {
+/** Tap the key for `ch`: on the base layer, under Shift, or by long-pressing a base key. */
+async function typeChar(d: Device, lang: Lang, ch: string, prev?: string): Promise<void> {
   let nodes = await keys(d)
-  const direct = charKey(nodes, ch)
+  const direct = charKey(nodes, ch, prev)
   if (direct) {
     await d.click(direct.x, direct.y)
     await sleep(0.4)
@@ -319,18 +321,19 @@ async function typeChar(d: Device, lang: Lang, ch: string): Promise<void> {
   const base = lang.longPress?.[ch]
   const holder = base ? charKey(nodes, base) : undefined
   if (holder) {
+    // Gboard's long-press popup is a window of its own that the dump does not show (round 3: no ü node,
+    // yet hold and release on u typed ü). Release in place to take the preselected entry, then check the
+    // page got `ch`, and take back anything else.
+    const before = ((await pageStep('long-press-before')).text ?? '').length
     await d.touch('down', holder.x, holder.y)
     await sleep(0.9)
-    const popup = charKey(gboardNodes(await d.dumpHierarchy()).filter((n) => n !== holder && n.y < holder.y), ch)
-    if (popup) {
-      await d.touch('move', popup.x, popup.y)
-      await sleep(0.2)
-      await d.touch('up', popup.x, popup.y)
-    } else {
-      await d.touch('up', holder.x, holder.y)
-      throw new Error(`no ${pyRepr(ch)} in the long-press popup of ${pyRepr(base)}`)
-    }
+    await d.touch('up', holder.x, holder.y)
     await sleep(0.4)
+    const text = (await pageStep('long-press-after')).text ?? ''
+    if (!text.normalize('NFC').endsWith(ch.normalize('NFC'))) {
+      for (let i = text.length; i > before; i--) await tapRole(d, 'delete')
+      throw new Error(`long-press on ${pyRepr(base)} typed ${pyRepr(text.slice(before))}, not ${pyRepr(ch)}`)
+    }
     return
   }
   const shift = roleKey(nodes, 'shift')
@@ -338,7 +341,7 @@ async function typeChar(d: Device, lang: Lang, ch: string): Promise<void> {
     await d.click(shift.x, shift.y)
     await sleep(0.6)
     nodes = await keys(d)
-    const shifted = charKey(nodes, ch)
+    const shifted = charKey(nodes, ch, prev)
     if (shifted) {
       await d.click(shifted.x, shifted.y)
       await sleep(0.4)
@@ -352,7 +355,7 @@ async function typeChar(d: Device, lang: Lang, ch: string): Promise<void> {
 }
 
 async function typeKeys(d: Device, lang: Lang, chars: string[]): Promise<void> {
-  for (const ch of chars) await typeChar(d, lang, ch)
+  for (let i = 0; i < chars.length; i++) await typeChar(d, lang, chars[i]!, chars[i - 1])
 }
 
 /** Type the probe word and commit it the way the language does. Returns what was picked. */
@@ -514,22 +517,36 @@ const ACTIONS: Record<string, (ctx: Ctx) => Promise<void>> = {
     if (!space) throw new Error('no space key')
     const start = ctx.steps.at(-1)!.selection.focus
     if (start === undefined || start < DRAG_CHARS) throw new Error(`caret at ${start}, too close to the start to move ${DRAG_CHARS}`)
+    // Back through the text is left in ltr and right in rtl. Round 3 dragged Hebrew left, which moves the
+    // caret towards the end it already sat at, so it never moved, and the selection then left the editor.
+    let sign = dragSign(ctx.steps.at(-1)!.text ?? '')
+    ctx.notes.drag_direction = sign < 0 ? 'left' : 'right'
     const samples: DragSample[] = []
     let px = 0
+    let reversed = false
     await ctx.d.touch('down', space.x, space.y)
     try {
       // Gboard waits for a short move before it treats the touch as a cursor drag.
       await sleep(0.1)
       while (px < DRAG_MAX_PX) {
         px += DRAG_STEP_PX
-        await ctx.d.touch('move', space.x - px, space.y)
+        await ctx.d.touch('move', space.x + sign * px, space.y)
         const sel = (await cdpEval(SELECTION_JS)) as Selection
-        if (sel.focus === undefined) continue
+        if (!sel.inEditor || sel.focus === undefined) {
+          ctx.notes.selection_left_editor_at_px = px
+          break
+        }
         samples.push({px, focus: sel.focus})
         if (start - sel.focus >= DRAG_CHARS) break
+        // Moving forward means this build maps the drag the other way. Turn round once, from where we are.
+        if (sel.focus > start && !reversed) {
+          reversed = true
+          sign = -sign as -1 | 1
+          ctx.notes.drag_direction = `${ctx.notes.drag_direction} then reversed`
+        }
       }
     } finally {
-      await ctx.d.touch('up', space.x - px, space.y)
+      await ctx.d.touch('up', space.x + sign * px, space.y)
     }
     await sleep(0.5)
     const after = (await record(ctx, 'drag')).selection
@@ -575,7 +592,7 @@ const ACTIONS: Record<string, (ctx: Ctx) => Promise<void>> = {
     let nodes = await emojiPanel(ctx.d)
     // Prefer a ZWJ sequence or a flag, which the Flags or People tab holds.
     for (const tab of [/^flags?$/i, /people|smileys/i]) {
-      if (pickEmoji(nodes)?.label.match(/‍|[\u{1f1e6}-\u{1f1ff}]{2}/u)) break
+      if (pickEmoji(nodes)?.label.match(/\u200d|[\u{1f1e6}-\u{1f1ff}]{2}/u)) break
       const t = nodes.find((n) => tab.test(n.label))
       if (t) {
         await ctx.d.click(t.x, t.y)
@@ -589,19 +606,24 @@ const ACTIONS: Record<string, (ctx: Ctx) => Promise<void>> = {
     await record(ctx, 'panel', {labels: labels(nodes)})
     await ctx.d.click(pick.x, pick.y)
     await sleep(0.8)
-    await record(ctx, 'emoji', {picked: pick.label})
+    const before = ctx.steps.at(-1)!.text ?? ''
+    const after = (await record(ctx, 'emoji', {picked: pick.label})).text ?? ''
+    // The label may be mangled (".."), so the inserted text is what the page got.
+    ctx.notes.inserted = after.startsWith(before) ? after.slice(before.length) : after
     const del = roleKey(gboardNodes(await ctx.d.dumpHierarchy()), 'delete')
     if (!del) throw new Error('no delete key on the emoji panel')
     await ctx.d.click(del.x, del.y)
     await sleep(0.8)
-    await record(ctx, 'delete')
+    const left = (await record(ctx, 'delete')).text ?? ''
+    ctx.notes.one_backspace_removed_it = left === before
+    if (!ctx.notes.inserted) throw new Error('tapping the emoji cell inserted nothing')
+    if (left !== before) throw new Error(`one Backspace left ${pyRepr(left)}, expected ${pyRepr(before)}`)
   },
 }
 
 /**
  * Open the emoji panel. A one-language keyboard has an emoji key left of Space. With two languages that
- * slot is the globe key (run 1, th-2), so try the comma key's long-press popup, then the features menu,
- * then the symbols layer. Every screen tried is dumped to <base>-emoji-<n>-<how>.xml so a miss shows what
+ * slot is the globe key, so hold the comma key, then try the features menu and the symbols layer. Every screen tried is dumped to <base>-emoji-<n>-<how>.xml so a miss shows what
  * was offered.
  */
 async function openEmoji(ctx: Ctx): Promise<string> {
@@ -612,7 +634,7 @@ async function openEmoji(ctx: Ctx): Promise<string> {
     writeFile(`${ctx.base}-emoji-${++n}-${how}.xml`, xml)
     return gboardNodes(xml)
   }
-  const opened = async (): Promise<boolean> => pickEmoji(await dump('panel-check')) !== undefined
+  const opened = async (): Promise<boolean> => emojiPanelOpen(await dump('panel-check'))
   const nodes = await keys(d)
   const key = roleKey(nodes, 'emoji')
   if (key) {
@@ -622,18 +644,19 @@ async function openEmoji(ctx: Ctx): Promise<string> {
   }
   const comma = nodes.find((x) => x.id === 'key_pos_bottom_symbol_1')
   if (comma) {
+    // With two languages the emoji key gives way to the globe key, and the comma key carries a ☺ hint:
+    // holding it opens the panel. Round 3 did open it on every layout (dump 2 of each emoji run is the
+    // panel), but looked for an emoji item in a popup the dump does not show, took the panel for a typed
+    // comma, and tapped delete and the menu inside it. Release in place and look for the panel.
+    const before = ((await pageStep('comma-before')).text ?? '').length
     await d.touch('down', comma.x, comma.y)
     await sleep(1.0)
-    const popup = (await dump('comma-popup')).filter((x) => x.y < comma.y - 20)
-    const item = roleKey(popup, 'emoji')
-    const to = item ?? comma
-    await d.touch('move', to.x, to.y)
-    await sleep(0.2)
-    await d.touch('up', to.x, to.y)
+    await d.touch('up', comma.x, comma.y)
     await sleep(1.2)
-    if (item && (await opened())) return `comma popup ${item.label}`
-    // Without an emoji item the release typed a comma. Take it back.
-    if (!item) await tapRole(d, 'delete')
+    if (emojiPanelOpen(await dump('comma-hold'))) return 'comma long-press'
+    // No panel: the hold typed a comma or an alternate. Take it back.
+    const typed = ((await pageStep('comma-after')).text ?? '').length - before
+    for (let i = 0; i < typed; i++) await tapRole(d, 'delete')
   }
   const menu = nodes.find((x) => x.id === 'key_pos_header_access_points_menu')
   if (menu) {

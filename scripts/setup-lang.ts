@@ -7,7 +7,7 @@
 
 import {writeFileSync} from 'node:fs'
 import {adbOutput, adbPassthrough} from './lib/adb.ts'
-import {downloadStates, enabledLocales, enabledSubtypes, GBOARD, LANGS, LATIN_IME, layoutTiles, localeMatches, pickRow, subtypesLine, type Lang} from './lib/gboard.ts'
+import {downloadStates, enabledLocales, scrollBand, enabledSubtypes, GBOARD, LANGS, LATIN_IME, layoutTiles, localeMatches, pickRow, subtypesLine, type Lang} from './lib/gboard.ts'
 import {center, parseBounds, parseXml, switchRow} from './lib/hierarchy.ts'
 import {Device, type UiObject} from './lib/u2.ts'
 import {safePath, sleep} from './lib/util.ts'
@@ -92,6 +92,19 @@ function titles(xml: string): Array<{text: string; x: number; y: number}> {
 }
 
 /**
+ * Scroll the language list one page. Round 3 scrolled with the search keyboard up: the swipe crossed Gboard,
+ * glide typing turned it into words, and the search read "Arabic by by by ...", so Arabic was never added.
+ * Back would hide the keyboard but closes the search on some Gboard builds (round 1, vi), so swipe only in
+ * the band between the list's top and the keyboard's top instead.
+ */
+async function scrollList(d: Device, xml: string): Promise<void> {
+  const [w, h] = await d.windowSize()
+  const band = scrollBand(xml, h)
+  await d.swipe(w / 2, band.bottom, w / 2, band.top, 0.5)
+  await sleep(0.8)
+}
+
+/**
  * Find a row matching `lang.rows` in the list on screen, scrolling the list (never pressing Back, which
  * closes the search on Gboard v15 and drops back to the unfiltered list, as run 1 did for ar and vi).
  */
@@ -101,7 +114,7 @@ async function findRow(d: Device, lang: Lang, xml: string, name: string): Promis
     if (row) return row
     if (!(await d.find({scrollable: true}).exists())) break
     const before = JSON.stringify(titles(xml).map((t) => t.text))
-    await d.find({scrollable: true}).scrollForward(20)
+    await scrollList(d, xml)
     xml = await d.dumpHierarchy()
     // The end of the list: a scroll that changes nothing.
     if (JSON.stringify(titles(xml).map((t) => t.text)) === before) break

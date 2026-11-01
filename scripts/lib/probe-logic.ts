@@ -85,3 +85,23 @@ export function cursorControlFromLog(log: string): boolean | undefined {
   const m = /CURSOR_CONTROL setting=(present|absent)/.exec(log)
   return m ? m[1] === 'present' : undefined
 }
+
+/**
+ * The paragraph direction of `text` by its first strong character, as the Unicode bidi algorithm picks it:
+ * Hebrew and Arabic make it rtl. The editor block has no dir attribute, and Chrome lays it out this way.
+ */
+export function textDirection(text: string): 'ltr' | 'rtl' {
+  for (const ch of text) {
+    if (/[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufeff]/.test(ch)) return 'rtl'
+    if (/\p{L}/u.test(ch)) return 'ltr'
+  }
+  return 'ltr'
+}
+
+/**
+ * Screen direction to drag the space bar to move the caret back through `text`: left in ltr, right in rtl,
+ * since Gboard moves the caret the way the finger goes on screen. -1 is left.
+ */
+export function dragSign(text: string): -1 | 1 {
+  return textDirection(text) === 'rtl' ? 1 : -1
+}

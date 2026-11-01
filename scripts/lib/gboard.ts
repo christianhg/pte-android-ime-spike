@@ -19,7 +19,10 @@ export type Lang = {
   layout?: RegExp
   /** Keys to tap for the probe word, in order. */
   keys: string[]
-  /** Characters without a key of their own, reached by long-pressing the key named here. */
+  /**
+   * Characters without a key of their own, reached by long-pressing the key named here. The popup is not
+   * in the accessibility tree, so the probe holds and releases in place, taking the preselected entry.
+   */
   longPress?: Record<string, string>
   /** How the word is committed before Space: Space alone, or the first candidate first. */
   commit: 'space' | 'candidate'
@@ -92,7 +95,8 @@ const ROLE_IDS: Partial<Record<Role, string[]>> = {
   delete: ['key_pos_del'],
   enter: ['key_pos_ime_action'],
   shift: ['key_pos_shift'],
-  language: ['key_pos_qwerty_globe'],
+  // switch_to_next_language is the emoji key on a one-language keyboard, which roleKey filters out by label.
+  language: ['key_pos_qwerty_globe', 'key_pos_switch_to_next_language'],
   symbols: ['key_pos_switch_to_symbol'],
 }
 
@@ -112,18 +116,50 @@ const ROLE_LABELS: Record<Role, RegExp> = {
 export function roleKey(nodes: GNode[], role: Role): GNode | undefined {
   const ids = ROLE_IDS[role] ?? []
   // The bottom-row slot left of Space holds the emoji key on a one-language keyboard and the globe key
-  // otherwise, so that slot's id says nothing. Go by label there.
+  // otherwise, so a key found by id still has to pass the emoji label check.
   return nodes.find((n) => ids.includes(n.id) && !ROLE_LABELS.emoji.test(n.label)) ?? nodes.find((n) => ROLE_LABELS[role].test(n.label))
 }
 
-/** The key that types `ch`. Combining marks may carry a dotted circle (◌ั), and Latin keys may be either case. */
-export function charKey(nodes: GNode[], ch: string): GNode | undefined {
+// Gboard's Korean 2-set keys are named, not lettered (round 3, keyboard-ko.xml): consonants by their
+// jamo name (히읗 for ㅎ, 쌍비읍 for ㅃ on the shift layer), vowels by the syllable ㅇ + vowel (아 for ㅏ).
+const JAMO_NAMES: Record<string, string> = {
+  기역: 'ㄱ', 쌍기역: 'ㄲ', 니은: 'ㄴ', 디귿: 'ㄷ', 쌍디귿: 'ㄸ', 리을: 'ㄹ', 미음: 'ㅁ', 비읍: 'ㅂ', 쌍비읍: 'ㅃ',
+  시옷: 'ㅅ', 쌍시옷: 'ㅆ', 이응: 'ㅇ', 지읒: 'ㅈ', 쌍지읒: 'ㅉ', 치읓: 'ㅊ', 키읔: 'ㅋ', 티읕: 'ㅌ', 피읖: 'ㅍ', 히읗: 'ㅎ',
+}
+const VOWELS = 'ㅏㅐㅑㅒㅓㅔㅕㅖㅗㅘㅙㅚㅛㅜㅝㅞㅟㅠㅡㅢㅣ'
+
+/** The compatibility jamo a Korean key label stands for, or the label as it is. */
+function jamoOf(label: string): string {
+  if (JAMO_NAMES[label]) return JAMO_NAMES[label]!
+  // A lone syllable ㅇ + vowel, no final consonant: 아 is U+C544, each vowel steps 28 code points.
+  const cp = label.length === 1 ? label.codePointAt(0)! - 0xc544 : -1
+  if (cp >= 0 && cp % 28 === 0 && cp / 28 < VOWELS.length) return VOWELS[cp / 28]!
+  return label
+}
+
+/**
+ * What a key label types once Gboard's decoration is gone: surrounding space (Thai marks read " ั"), the
+ * dotted circle (◌ั), joiners and the invisible padding Gboard puts on Hindi keys ("स‌‌‌"), and Korean names.
+ */
+export function keyText(label: string): string {
+  return jamoOf(label.replace(/[\u25cc\u200c\u200d]/g, '').trim()).normalize('NFC')
+}
+
+const COMBINING = /^\p{M}+$/u
+
+/**
+ * The key that types `ch`. Latin keys may be either case. After a consonant, Gboard's Hindi keys preview
+ * each mark joined to it (round 3: after स, the virama key reads "स्" + ZWJ and the e-matra key "से"), so a
+ * combining mark also matches `prev` + mark.
+ */
+export function charKey(nodes: GNode[], ch: string, prev?: string): GNode | undefined {
   const wanted = new Set([ch, ch.toUpperCase(), ch.toLowerCase()].map((c) => c.normalize('NFC')))
+  if (prev && COMBINING.test(ch)) wanted.add((prev + ch).normalize('NFC'))
   // Keys first: once typing starts, the suggestion strip above them can hold the same character.
   const isKey = (n: GNode) => n.id.startsWith('key_pos_') && !n.id.startsWith('key_pos_header')
   for (const pool of [nodes.filter(isKey), nodes]) {
     for (const field of ['desc', 'text'] as const) {
-      const hit = pool.find((n) => n[field] && wanted.has(n[field].replaceAll('\u25cc', '').normalize('NFC')))
+      const hit = pool.find((n) => n[field] && wanted.has(keyText(n[field])))
       if (hit) return hit
     }
   }
@@ -167,16 +203,35 @@ export function firstCandidate(nodes: GNode[]): GNode | undefined {
 const PICTOGRAPH = /\p{Extended_Pictographic}/u
 const FLAG = /[\u{1f1e6}-\u{1f1ff}]{2}/u
 
+// The dump turns every character outside the Basic Multilingual Plane into '.', so most emoji cells read
+// ".." (round 3: 43 to 52 such cells in each open panel). BMP ones like ☺️ survive, and so do the joiner
+// and BMP parts of a ZWJ sequence ("..\u200d↕️").
+const MANGLED = /^\.+$/
+
+// Flags are pairs of regional indicators, which are not Extended_Pictographic. Some builds name cells.
+const isEmojiCell = (n: GNode) => !n.id.startsWith('key_pos_') && (MANGLED.test(n.label) || PICTOGRAPH.test(n.label) || FLAG.test(n.label) || /^(flag|family)\b/i.test(n.label) || n.label.includes('\u200d'))
+
 /**
- * The emoji to tap: a ZWJ sequence or a flag when the panel shows one, any emoji otherwise. Gboard names
- * the cells either by the emoji itself or by its name, so names count too.
+ * Whether Gboard's emoji panel is up. Its labels are localised (그림 이모티콘 키보드 숨기기, ซ่อน แป้นพิมพ์อีโมจิ,
+ * 隐藏表情符号键盘 ...), so go by its grid instead: several emoji cells that are not keys. The suggestion
+ * strip can hold one or two emoji, never a grid.
+ */
+export function emojiPanelOpen(nodes: GNode[]): boolean {
+  return nodes.filter(isEmojiCell).length >= 8
+}
+
+/**
+ * The emoji to tap in an open panel: a ZWJ sequence or a flag when one is readable, else any readable
+ * emoji, else a mangled cell, which still types its real emoji (the page reads it back over CDP).
  */
 export function pickEmoji(nodes: GNode[]): GNode | undefined {
-  const cells = nodes.filter((n) => !n.id.startsWith('key_pos_'))
+  if (!emojiPanelOpen(nodes)) return undefined
+  const cells = nodes.filter(isEmojiCell)
   return (
     cells.find((n) => n.label.includes('\u200d') || FLAG.test(n.label)) ??
     cells.find((n) => /^(flag\b|family\b)/i.test(n.label)) ??
-    cells.find((n) => PICTOGRAPH.test(n.label) && [...new Intl.Segmenter().segment(n.label)].length === 1)
+    cells.find((n) => PICTOGRAPH.test(n.label) && [...new Intl.Segmenter().segment(n.label)].length === 1) ??
+    cells.find((n) => MANGLED.test(n.label))
   )
 }
 
@@ -358,4 +413,17 @@ export function currentInputType(dump: string): number | undefined {
 /** A text field with the URI variation, as Chrome's URL bar reports itself (0x80011 in round 2). */
 export function isUrlField(inputType: number | undefined): boolean {
   return inputType !== undefined && (inputType & 0xf) === 1 && (inputType & 0xff0) === 0x10
+}
+
+/**
+ * Where to swipe a settings list without touching the keyboard: from just above Gboard's window (or 85% of
+ * the screen when it is hidden) up to 30% of the way down from the list's top, in screen pixels.
+ */
+export function scrollBand(xml: string, screenHeight: number): {top: number; bottom: number} {
+  const nodes = parseXml(xml)
+  const keyboardTop = Math.min(...nodes.filter((n) => n.attrs.package === GBOARD && /key_pos_/.test(n.attrs['resource-id'] ?? '')).map((n) => parseBounds(n.attrs.bounds!).top))
+  const list = nodes.find((n) => n.attrs.scrollable === 'true' && n.attrs['resource-id'] !== '')
+  const listTop = list ? parseBounds(list.attrs.bounds!).top : screenHeight * 0.15
+  const bottom = Number.isFinite(keyboardTop) ? keyboardTop - 60 : screenHeight * 0.85
+  return {top: Math.round(listTop + (bottom - listTop) * 0.3), bottom: Math.round(bottom)}
 }
