@@ -473,3 +473,31 @@ export function searchQuery(xml: string): string | undefined {
 export function languagePickerOpen(xml: string): boolean {
   return parseXml(xml).some((n) => n.attrs.package === GBOARD && n.attrs.text === 'English (US)')
 }
+
+export type KeyboardDump = {state: 'ok'; nodes: GNode[]} | {state: 'empty' | 'unreadable'; nodes: []; why: string}
+
+/**
+ * Read a hierarchy dump for Gboard's nodes, telling an empty or unreadable dump apart from a keyboard that
+ * is there. Round 5 de-2 reported "no key for 'f'; labels []" from a dump holding only Chrome and the
+ * status bar: the keyboard was not in the hierarchy, which is a different failure from a missing key.
+ */
+export function readKeyboard(xml: string): KeyboardDump {
+  let nodes: GNode[]
+  try {
+    nodes = gboardNodes(xml)
+  } catch (error) {
+    return {state: 'unreadable', nodes: [], why: error instanceof Error ? error.message : String(error)}
+  }
+  if (!nodes.length) return {state: 'empty', nodes: [], why: 'no Gboard nodes in the hierarchy'}
+  return {state: 'ok', nodes}
+}
+
+/**
+ * Why `ch` cannot be typed from this dump: the keyboard is not in it at all, or it is there without the
+ * key. The probe retries an empty dump before it gives up, and uses this for the message it fails with.
+ */
+export function keyLookupFailure(xml: string, ch: string): string {
+  const dump = readKeyboard(xml)
+  if (dump.state !== 'ok') return `keyboard hierarchy empty: ${dump.why}`
+  return `no key for ${JSON.stringify(ch)}; labels ${JSON.stringify(dump.nodes.map((n) => n.label).slice(0, 80))}`
+}

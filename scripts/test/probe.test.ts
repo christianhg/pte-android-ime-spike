@@ -33,6 +33,8 @@ import {
   currentInputType,
   isUrlField,
   pickRow,
+  keyLookupFailure,
+  readKeyboard,
   languagePickerOpen,
   keyboardTop,
   reachableRows,
@@ -541,3 +543,17 @@ test('adb shell arguments reach the device shell as written, ? and & included', 
   assert.deepEqual(adbArgs(['shell', 'settings', 'put', 'secure', 'selected_input_method_subtype', '-1641843089']).at(-1), '-1641843089')
 })
 
+test('an empty keyboard dump is its own failure, not a missing key (de-2, round 5)', () => {
+  // Round 5 de-2 reported "no key for 'f'; labels []" from this dump: Chrome and the status bar, no Gboard.
+  const empty = fixture('r5-de-no-keyboard.xml')
+  assert.equal(readKeyboard(empty).state, 'empty')
+  assert.match(keyLookupFailure(empty, 'f'), /^keyboard hierarchy empty/)
+  assert.equal(readKeyboard('').state, 'unreadable', 'an empty string does not parse')
+  assert.equal(readKeyboard('<hierarchy><node').state, 'unreadable')
+  assert.match(keyLookupFailure('', 'f'), /^keyboard hierarchy empty/)
+  // A real keyboard without the key still says which key, so the two failures stay apart.
+  assert.equal(readKeyboard(fixture('r3-de-keyboard.xml')).state, 'ok')
+  assert.match(keyLookupFailure(fixture('r3-de-keyboard.xml'), 'ü'), /^no key for "ü"; labels \[/)
+  assert.equal(readKeyboard(fixture('en-keyboard.xml')).state, 'ok')
+  assert.equal(readKeyboard(fixture('ja-keyboard.xml')).state, 'ok')
+})

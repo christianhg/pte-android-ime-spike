@@ -34,10 +34,12 @@ import {
   originFromScreen,
   originFromTap,
   pickEmoji,
+  readKeyboard,
   roleKey,
   subtypeHashFromLog,
   subtypeLocale,
   type GNode,
+  type KeyboardDump,
   type Lang,
   type Origin,
   type Role,
@@ -303,16 +305,29 @@ async function freshEditor(d: Device): Promise<Record<string, unknown>> {
 
 // --- keyboard ----------------------------------------------------------------------------------------
 
-/** Gboard's nodes. A dump taken mid-redraw can miss half the keyboard, so retry until Space is there. */
+export class KeyboardHierarchyEmpty extends Error {
+  override name = 'KeyboardHierarchyEmpty'
+}
+
+/**
+ * Gboard's nodes. A dump taken mid-redraw can miss half the keyboard, so retry until Space is there. A dump
+ * with no Gboard nodes at all, or one that does not parse, is retried once more after a pause and then
+ * fails as "keyboard hierarchy empty", so it is never reported as a missing key.
+ */
 async function keys(d: Device): Promise<GNode[]> {
-  let nodes: GNode[] = []
+  let dump: KeyboardDump = {state: 'empty', nodes: [], why: 'not dumped yet'}
   for (let attempt = 0; attempt < 6; attempt++) {
     checkDeadline()
-    nodes = gboardNodes(await d.dumpHierarchy())
-    if (roleKey(nodes, 'space')) return nodes
+    dump = readKeyboard(await d.dumpHierarchy())
+    if (roleKey(dump.nodes, 'space')) return dump.nodes
     await sleep(1)
   }
-  return nodes
+  if (dump.state !== 'ok') {
+    await sleep(1.5)
+    dump = readKeyboard(await d.dumpHierarchy())
+    if (dump.state !== 'ok') throw new KeyboardHierarchyEmpty(`keyboard hierarchy empty: ${dump.why}`)
+  }
+  return dump.nodes
 }
 
 async function tapRole(d: Device, role: Role): Promise<GNode> {
@@ -368,6 +383,7 @@ async function typeChar(d: Device, lang: Lang, ch: string, typed = ''): Promise<
     const back = roleKey(nodes, 'shift')
     if (back) await d.click(back.x, back.y)
   }
+  // keys() already failed on an empty hierarchy, so this is a keyboard that lacks the key.
   throw new Error(`no key for ${pyRepr(ch)}; labels ${pyRepr(labels(nodes))}`)
 }
 
