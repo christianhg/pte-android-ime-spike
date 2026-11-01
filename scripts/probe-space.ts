@@ -12,8 +12,13 @@
 //               set on the input method framework's tags first
 //   ims         lines of dumpsys input_method that differ between before and after
 //   page        the page's beforeinput and input events for the tap, the ground truth
-// Three arms: space taps Space 20 times, outside taps 40 px above the keyboard 5 times, hidden hides the
-// keyboard with Back and taps where Space was 5 times. A signal that fires on the last two is useless.
+// Three arms, run in this order: outside taps a spot that misses both the keys and the page 5 times (see
+// outsidePoint), space taps Space 10 times, hidden hides the keyboard with Back and taps where Space was 5 times.
+// A signal that fires on outside or hidden is useless. Hidden runs last because it is the arm most likely to leave
+// the keyboard in a state the recovery can't fix.
+// Every repetition starts from a known state: Gboard's letter keys are in the a11y dump (not dumpsys, whose
+// mInputShown stays true after the keys are gone), the field is empty before typing and holds exactly Kyou right
+// before the tap. Otherwise the repetition is recorded as a FAULT and the next one recovers on its own.
 // Each tap logs a SPACE line and the run ends with one SPACE_SUMMARY line per arm.
 //
 // Usage: IME_LANG=en node scripts/probe-space.ts <outdir>
@@ -36,7 +41,10 @@ export const ARMS = [
   ['hidden', 5],
 ] as const
 type Arm = (typeof ARMS)[number][0]
-const OUTSIDE = 40
+// What Gboard's autocapitalisation makes of k, y, o, u typed into the empty field.
+const EXPECTED = 'Kyou'
+const FOCUS_END = "(() => { const el = document.getElementById('ed'); el.focus(); const r = document.createRange(); r.selectNodeContents(el); r.collapse(false); const s = getSelection(); s.removeAllRanges(); s.addRange(r); return document.activeElement === el; })()"
+const KEYBOARD_ATTEMPTS = 4
 const LOG_WINDOW = 1
 const GETEVENT_SECONDS = 3
 // Tags whose VERBOSE level the probe asks for. The InputDispatcher ones are read by system_server and may
@@ -66,12 +74,15 @@ export type Shift = {desc: string; selected: boolean; checked: boolean} | null
 export type Touch = {device: string; x: number; y: number; up: boolean}
 export type Recent = {action: string; x: number; y: number; age: number; deviceId: string; line: string}
 export type LogLine = {t: number; pid: number; level: string; tag: string; line: string}
+export type Outside = {kind: 'nav-gap' | 'letter'; point: [number, number]; why: string}
 type Record_ = {
   arm: Arm
   rep: number
   space: Box | null
   tap: [number, number]
+  outside?: Outside
   shownBefore: boolean
+  keysAfter: boolean
   page: {space: boolean; textBefore: string; textAfter: string; events: string[]}
   getevent: {fired: boolean; touches: Touch[]}
   recent: {fired: boolean; events: Recent[]}
@@ -80,6 +91,12 @@ type Record_ = {
   logcat: {fired: boolean; lines: string[]}
   ims: {fired: boolean; added: string[]; removed: string[]}
   error?: string
+  fault?: string
+}
+
+/** The rep did not start from the known state, so its signals say nothing. */
+class Fault extends Error {
+  override name = 'Fault'
 }
 
 const records: Record_[] = []
@@ -92,6 +109,58 @@ const pad = (n: number): string => String(n).padStart(2, '0')
 /** The Space key's bounds in a dump, or null when the keyboard is not showing. */
 export function spaceKey(nodes: Node[]): Box | null {
   return nodes.find((n) => n.rid === 'key_pos_space' || n.label === 'Space')?.bounds ?? null
+}
+
+/** Gboard's letter keys (key_pos_<row>_<col> labelled with one letter), by lowercase letter. */
+export function letterKeys(nodes: Node[]): Map<string, Box> {
+  const keys = new Map<string, Box>()
+  for (const n of nodes) {
+    if (/^key_pos_\d+_\d+$/.test(n.rid) && /^[a-z]$/i.test(n.label) && n.bounds[2] > n.bounds[0]) keys.set(n.label.toLowerCase(), n.bounds)
+  }
+  return keys
+}
+
+/** The keyboard is usable when the dump has the letters typeKyou needs and the Space key. */
+export function keyboardReady(nodes: Node[]): boolean {
+  const keys = letterKeys(nodes)
+  return [...'kyou'].every((k) => keys.has(k)) && spaceKey(nodes) !== null
+}
+
+/**
+ * Where the outside arm taps. It has to miss the page, because a tap there blurs the field and closes the keyboard
+ * (run 3), and it has to miss every key. The strip is no good: while kyou is composing, the menu, three suggestions
+ * and voice typing fill it edge to edge, apart from 5 px margins and 3 px separators. With gesture navigation,
+ * Gboard's own window carries the navigation bar below the keys (input_method_navigation_bar_view, 2274-2400 on the
+ * API 36 emulator), whose only clickable node is Back. A tap in the widest gap between its buttons goes to Gboard's
+ * window, which has no key there, and never reaches Chrome. That is the first choice. Without such a bar, for example
+ * with three-button navigation drawn by System UI, fall back to a letter that kyou doesn't use. That tap does reach
+ * the page as a letter, but it shows whether the strip also changes for a non-Space key.
+ */
+export function outsidePoint(nodes: Node[]): Outside | null {
+  const bar = nodes.find((n) => n.rid === 'android:id/input_method_navigation_bar_view' || n.rid === 'android:id/navigationBarBackground')?.bounds
+  const keys = nodes.filter((n) => n.rid.startsWith('key_pos_') && n.bounds[2] > n.bounds[0])
+  const keysBottom = Math.max(0, ...keys.map((n) => n.bounds[3]))
+  if (bar && bar[1] >= keysBottom && bar[3] > bar[1]) {
+    // Buttons and button groups in the bar, but not the full-width frames that hold them.
+    const taken = nodes
+      .filter((n) => n.bounds[1] >= bar[1] && n.bounds[3] <= bar[3] && n.bounds[2] > n.bounds[0])
+      .filter((n) => n.clickable || n.bounds[2] - n.bounds[0] < 0.6 * (bar[2] - bar[0]))
+      .map((n) => [n.bounds[0], n.bounds[2]] as const)
+      .sort((a, b) => a[0] - b[0])
+    let best: [number, number] = [0, 0]
+    let x = bar[0]
+    for (const [l, r] of [...taken, [bar[2], bar[2]] as const]) {
+      if (l - x > best[1] - best[0]) best = [x, l]
+      x = Math.max(x, r)
+    }
+    if (best[1] - best[0] >= 60) {
+      const point: [number, number] = [Math.floor((best[0] + best[1]) / 2), Math.floor((bar[1] + bar[3]) / 2)]
+      return {kind: 'nav-gap', point, why: `gap ${best[0]}-${best[1]} in Gboard's navigation bar ${bar.join(',')}`}
+    }
+  }
+  const p = letterKeys(nodes).get('p')
+  if (p) return {kind: 'letter', point: center(p), why: 'no gap in a Gboard navigation bar, tapping the letter p instead'}
+  return null
 }
 
 /** The top edge of Gboard's window: the highest Gboard node. */
@@ -271,11 +340,6 @@ async function state(): Promise<PageState> {
   return (await cdpEval('window.__state()')) as PageState
 }
 
-async function shown(): Promise<boolean> {
-  const ims = await adb(['shell', 'dumpsys', 'input_method'])
-  return ims.includes('mInputShown=true') || ims.includes('mIsInputViewShown=true')
-}
-
 /** The device clock minus the host clock in seconds, from the midpoint of one `date` call. */
 async function clockOffset(): Promise<number> {
   const t0 = Date.now() / 1000
@@ -305,19 +369,34 @@ async function settled(d: Device): Promise<{xml: string; nodes: Node[]}> {
   return {xml, nodes}
 }
 
-/** Tap the field and wait for Gboard, as openKeyboard does. */
-async function showKeyboard(d: Device): Promise<void> {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const r = (await cdpEval("(() => { const r = document.getElementById('ed').getBoundingClientRect(); return {x: r.left + r.width / 2, y: r.top + Math.min(r.height / 2, 40), dpr: devicePixelRatio, ih: innerHeight, sh: screen.height}; })()")) as {x: number; y: number; dpr: number; ih: number; sh: number}
-    await d.click(Math.trunc(r.x * r.dpr), Math.trunc(r.y * r.dpr + (r.sh - r.ih) * r.dpr))
-    await cdpEval("(() => { const el = document.getElementById('ed'); el.focus(); const r = document.createRange(); r.selectNodeContents(el); r.collapse(false); const s = getSelection(); s.removeAllRanges(); s.addRange(r); })()")
-    for (let i = 0; i < 6; i++) {
-      if (await shown()) return
+/**
+ * Make sure Gboard's letter keys are in the dump and return that dump's nodes. dumpsys can't tell: mInputShown stays
+ * true after Back or a blur took the keys away. Each attempt taps the field and puts the caret at its end over CDP,
+ * then polls the dump for 4s. From the third attempt the field is blurred over CDP first, so Chrome starts a fresh
+ * input connection when it is focused again.
+ */
+async function showKeyboard(d: Device): Promise<Node[]> {
+  let nodes = gboardNodes(await d.dumpHierarchy())
+  if (keyboardReady(nodes)) return nodes
+  for (let attempt = 1; attempt <= KEYBOARD_ATTEMPTS; attempt++) {
+    if (attempt >= 3) {
+      await cdpEval("document.getElementById('ed').blur()")
       await sleep(0.5)
     }
-    phase(`keyboard not back after tap ${attempt + 1}`)
+    const r = (await cdpEval("(() => { const r = document.getElementById('ed').getBoundingClientRect(); return {x: r.left + r.width / 2, y: r.top + Math.min(r.height / 2, 40), dpr: devicePixelRatio, ih: innerHeight, sh: screen.height}; })()")) as {x: number; y: number; dpr: number; ih: number; sh: number}
+    await d.click(Math.trunc(r.x * r.dpr), Math.trunc(r.y * r.dpr + (r.sh - r.ih) * r.dpr))
+    const focused = await cdpEval(FOCUS_END)
+    for (let i = 0; i < 8; i++) {
+      await sleep(0.5)
+      nodes = gboardNodes(await d.dumpHierarchy())
+      if (keyboardReady(nodes)) {
+        phase(`keyboard back after attempt ${attempt}`)
+        return nodes
+      }
+    }
+    phase(`no Gboard letter keys after attempt ${attempt}${attempt >= 3 ? ' (blur and refocus)' : ''}, field focused=${focused}`)
   }
-  throw new Error('keyboard did not come back')
+  throw new Fault(`no Gboard letter keys in the dump after ${KEYBOARD_ATTEMPTS} attempts to tap and focus the field`)
 }
 
 /** Empty the field with Gboard's Delete key, then over CDP for anything left. */
@@ -334,19 +413,33 @@ async function clear(d: Device): Promise<void> {
   if (s.text) {
     phase(`delete key left ${pyRepr(s.text)}, clearing over CDP`)
     await cdpEval("(() => { const el = document.getElementById('ed'); el.textContent = ''; const r = document.createRange(); r.selectNodeContents(el); const s = getSelection(); s.removeAllRanges(); s.addRange(r); })()")
+    // Gboard may still hold the old composition, so give it a fresh input connection. showKeyboard brings the keys
+    // back if this hid them.
+    await cdpEval("document.getElementById('ed').blur()")
+    await sleep(0.3)
+    await cdpEval(FOCUS_END)
     await sleep(0.5)
   }
 }
 
 /** Type kyou from one dump. Shift changes the letters' labels after the first, not their places. */
-async function typeKyou(d: Device): Promise<void> {
-  const nodes = gboardNodes(await d.dumpHierarchy())
+async function typeKyou(d: Device, nodes: Node[]): Promise<void> {
+  const keys = letterKeys(nodes)
   for (const key of 'kyou') {
-    const k = nodes.find((n) => n.rid.startsWith('key_pos_') && n.label.toLowerCase() === key)
-    if (!k) throw new Error(`no Gboard key ${pyRepr(key)}`)
-    await d.click(...center(k.bounds))
+    const k = keys.get(key)
+    if (!k) throw new Fault(`no Gboard key ${pyRepr(key)}`)
+    await d.click(...center(k))
     await sleep(0.4)
   }
+}
+
+/** Poll the dump until the letter keys are gone, for up to 3s. */
+async function keysGone(d: Device): Promise<boolean> {
+  for (let i = 0; i < 6; i++) {
+    if (!keyboardReady(gboardNodes(await d.dumpHierarchy()))) return true
+    await sleep(0.5)
+  }
+  return false
 }
 
 type Context = {logs: LogStream; offset: number; devices: Map<string, {maxX: number; maxY: number}>; screen: [number, number]; pids: Set<number>}
@@ -359,6 +452,7 @@ async function rep(d: Device, ctx: Context, arm: Arm, n: number): Promise<void> 
     space: null,
     tap: [0, 0],
     shownBefore: false,
+    keysAfter: false,
     page: {space: false, textBefore: '', textAfter: '', events: []},
     getevent: {fired: false, touches: []},
     recent: {fired: false, events: []},
@@ -369,28 +463,38 @@ async function rep(d: Device, ctx: Context, arm: Arm, n: number): Promise<void> 
   }
   records.push(rec)
   try {
-    if (!(await shown())) await showKeyboard(d)
+    await showKeyboard(d)
     await clear(d)
-    await typeKyou(d)
+    const empty = await state()
+    if (empty.text) throw new Fault(`field holds ${pyRepr(empty.text)} after clearing, expected ''`)
+    await typeKyou(d, await showKeyboard(d))
     const typed = gboardNodes(await d.dumpHierarchy())
     const space = spaceKey(typed)
-    const top = keyboardTop(typed)
-    if (!space || top === null) throw new Error('no Space key in the dump after typing')
+    if (!space || !keyboardReady(typed)) throw new Fault('no Gboard letter keys or Space key in the dump after typing')
+    const s = await state()
+    if (s.text !== EXPECTED) throw new Fault(`field holds ${pyRepr(s.text)} after typing, expected ${pyRepr(EXPECTED)}`)
     rec.space = space
-    rec.tap = arm === 'outside' ? [center(space)[0], top - OUTSIDE] : center(space)
+    if (arm === 'outside') {
+      const outside = outsidePoint(typed)
+      if (!outside) throw new Fault('no outside tap point: no Gboard navigation bar gap and no letter p')
+      rec.outside = outside
+      rec.tap = outside.point
+    } else rec.tap = center(space)
     if (arm === 'hidden') {
       await adb(['shell', 'input', 'keyevent', 'KEYCODE_BACK'])
-      for (let i = 0; i < 6 && (await shown()); i++) await sleep(0.5)
+      if (!(await keysGone(d))) throw new Fault('Gboard letter keys still in the dump 3s after Back')
     }
 
     const before = await settled(d)
     writeFileSync(`${base}-before.xml`, before.xml)
     rec.strip.before = stripLabels(before.nodes)
     rec.shift.before = shiftState(before.xml)
+    rec.shownBefore = keyboardReady(before.nodes)
+    if (arm !== 'hidden' && !rec.shownBefore) throw new Fault('Gboard letter keys gone from the dump right before the tap')
     const imsBefore = await adb(['shell', 'dumpsys', 'input_method'])
     writeFileSync(`${base}-ims-before.txt`, imsBefore)
-    rec.shownBefore = imsBefore.includes('mInputShown=true') || imsBefore.includes('mIsInputViewShown=true')
     const s0 = await state()
+    if (s0.text !== EXPECTED) throw new Fault(`field holds ${pyRepr(s0.text)} right before the tap, expected ${pyRepr(EXPECTED)}`)
 
     const touches = getevent(GETEVENT_SECONDS)
     await sleep(1)
@@ -403,6 +507,7 @@ async function rep(d: Device, ctx: Context, arm: Arm, n: number): Promise<void> 
     await d.screenshot(`${base}-after`)
     rec.strip.after = stripLabels(after.nodes)
     rec.shift.after = shiftState(after.xml)
+    rec.keysAfter = keyboardReady(after.nodes)
     rec.strip.fired = rec.strip.after.join('|') !== rec.strip.before.join('|')
     rec.shift.fired = JSON.stringify(rec.shift.after) !== JSON.stringify(rec.shift.before)
 
@@ -434,7 +539,8 @@ async function rep(d: Device, ctx: Context, arm: Arm, n: number): Promise<void> 
     rec.getevent.touches = parseGetevent(raw, ctx.devices, ctx.screen)
     rec.getevent.fired = rec.getevent.touches.some((t) => t.up && within(t.x, t.y, space))
   } catch (error) {
-    rec.error = errorRepr(error)
+    if (error instanceof Fault) rec.fault = error.message
+    else rec.error = errorRepr(error)
     try {
       writeFileSync(`${base}-fail.xml`, await d.dumpHierarchy())
       await d.screenshot(`${base}-fail`)
@@ -442,8 +548,9 @@ async function rep(d: Device, ctx: Context, arm: Arm, n: number): Promise<void> 
   }
   const f = (b: boolean): string => (b ? 'Y' : 'n')
   console.log(
-    `SPACE arm=${arm} rep=${n} tap=${rec.tap.join(',')} shown_before=${rec.shownBefore} page=${f(rec.page.space)} getevent=${f(rec.getevent.fired)} recent=${f(rec.recent.fired)} strip=${f(rec.strip.fired)} shift=${f(rec.shift.fired)} logcat=${f(rec.logcat.fired)} ims=${f(rec.ims.fired)}${rec.error ? ` ERROR ${rec.error}` : ''}`,
+    `SPACE arm=${arm} rep=${n} tap=${rec.tap.join(',')}${rec.outside ? ` outside=${rec.outside.kind}` : ''} shown_before=${rec.shownBefore} keys_after=${rec.keysAfter} page=${f(rec.page.space)} getevent=${f(rec.getevent.fired)} recent=${f(rec.recent.fired)} strip=${f(rec.strip.fired)} shift=${f(rec.shift.fired)} logcat=${f(rec.logcat.fired)} ims=${f(rec.ims.fired)}${rec.fault ? ` FAULT ${rec.fault}` : ''}${rec.error ? ` ERROR ${rec.error}` : ''}`,
   )
+  if (rec.outside) console.log(`SPACE_OUTSIDE arm=${arm} rep=${n} kind=${rec.outside.kind} tap=${rec.outside.point.join(',')} why=${pyRepr(rec.outside.why)}`)
   console.log(`SPACE_PAGE arm=${arm} rep=${n} before=${pyRepr(rec.page.textBefore)} after=${pyRepr(rec.page.textAfter)} events=${pyRepr(rec.page.events)}`)
   console.log(`SPACE_STRIP arm=${arm} rep=${n} before=${pyRepr(rec.strip.before)} after=${pyRepr(rec.strip.after)}`)
   console.log(`SPACE_SHIFT arm=${arm} rep=${n} before=${pyRepr(rec.shift.before)} after=${pyRepr(rec.shift.after)}`)
@@ -456,7 +563,7 @@ async function rep(d: Device, ctx: Context, arm: Arm, n: number): Promise<void> 
 export function summary(recs: Record_[], arm: Arm): string {
   const rs = recs.filter((r) => r.arm === arm)
   const count = (k: 'getevent' | 'recent' | 'strip' | 'shift' | 'logcat' | 'ims') => rs.filter((r) => r[k].fired).length
-  return `SPACE_SUMMARY arm=${arm} n=${rs.length} errors=${rs.filter((r) => r.error).length} page=${rs.filter((r) => r.page.space).length} getevent=${count('getevent')} recent=${count('recent')} strip=${count('strip')} shift=${count('shift')} logcat=${count('logcat')} ims=${count('ims')}`
+  return `SPACE_SUMMARY arm=${arm} n=${rs.length} errors=${rs.filter((r) => r.error).length} faults=${rs.filter((r) => r.fault).length} keys_after=${rs.filter((r) => r.keysAfter).length} page=${rs.filter((r) => r.page.space).length} getevent=${count('getevent')} recent=${count('recent')} strip=${count('strip')} shift=${count('shift')} logcat=${count('logcat')} ims=${count('ims')}`
 }
 
 async function main(): Promise<void> {

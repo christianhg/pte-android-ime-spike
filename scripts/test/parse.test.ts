@@ -9,7 +9,7 @@ import {packageKeys, parseXml} from '../lib/hierarchy.ts'
 import {pyRepr, pySorted} from '../lib/util.ts'
 import {candidates, findLabel, gboardNodes, summary} from '../probe-candidates.ts'
 import {hasKanji, screenLabels, stripLabels, summary as readinessSummary} from '../probe-readiness.ts'
-import {diffLines, keyboardTop, pageGotSpace, parseGetevent, parseLogLine, parseRecentQueue, relevant, shiftState, spaceKey, stripLabels as spaceStrip, touchDevices} from '../probe-space.ts'
+import {diffLines, keyboardReady, keyboardTop, letterKeys, outsidePoint, pageGotSpace, parseGetevent, parseLogLine, parseRecentQueue, relevant, shiftState, spaceKey, stripLabels as spaceStrip, touchDevices} from '../probe-space.ts'
 import {classify, conversions, isHiragana, isLoadLine, lineTime, loadSummary, nonHiragana, result, scanLog} from '../probe-load.ts'
 
 const GBOARD = 'com.google.android.inputmethod.latin'
@@ -234,6 +234,20 @@ test('the space probe finds Space, the strip and shift in the English keyboard d
   assert.deepEqual(spaceStrip(nodes), ['Open features menu', 'Sticker Keyboard', 'GIF Keyboard', 'Clipboard', 'Settings', 'Theme settings', 'Use voice typing'])
   assert.deepEqual(shiftState(xml), {desc: 'Shift enabled', selected: false, checked: false})
   assert.equal(shiftState(fixture('no-gboard.xml')), null)
+})
+
+test('the space probe reads keyboard readiness from letter keys and taps outside in the navigation bar gap', () => {
+  const nodes = gboardNodes(fixture('en-keyboard.xml'))
+  assert.equal(letterKeys(nodes).size, 26)
+  assert.deepEqual(letterKeys(nodes).get('k'), [807, 1808, 914, 1963])
+  assert.equal(keyboardReady(nodes), true)
+  assert.equal(keyboardReady(gboardNodes(fixture('no-gboard.xml'))), false)
+  // Between the centre group (445-634) and the right group (876-1059), below the keys.
+  assert.deepEqual(outsidePoint(nodes), {kind: 'nav-gap', point: [755, 2337], why: "gap 634-876 in Gboard's navigation bar 0,2274,1080,2400"})
+  const noBar = nodes.filter((n) => n.bounds[1] < 2274)
+  assert.equal(outsidePoint(noBar)?.kind, 'letter')
+  const p = letterKeys(nodes).get('p')!
+  assert.deepEqual(outsidePoint(noBar)?.point, [Math.floor((p[0] + p[2]) / 2), Math.floor((p[1] + p[3]) / 2)])
 })
 
 test('the space probe scales getevent touches to pixels and pairs down with up', () => {
