@@ -116,3 +116,16 @@ const observeField = () => {
   }).observe(field, {subtree: true, childList: true, characterData: true, characterDataOldValue: true})
 }
 observeField()
+
+// Diagnostic: programmatic selection writes (WebKit commits marked text when
+// the page moves the selection during a composition).
+for (const name of ['addRange', 'removeAllRanges', 'removeRange', 'setBaseAndExtent', 'collapse', 'collapseToEnd', 'collapseToStart', 'extend', 'selectAllChildren', 'setPosition', 'empty']) {
+  const original = Selection.prototype[name]
+  if (typeof original !== 'function') continue
+  Selection.prototype[name] = function (...args) {
+    if (window.__inputs.length < 200) {
+      window.__inputs.push({type: 'sel:' + name, data: args.map((a) => (a && typeof a === 'object' ? (a instanceof Range ? 'Range(' + describe(a.startContainer) + ',' + a.startOffset + ')' : describe(a)) : String(a))).join(' ; ').slice(0, 400), t: Date.now()})
+    }
+    return original.apply(this, args)
+  }
+}
