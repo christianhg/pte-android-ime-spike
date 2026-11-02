@@ -97,7 +97,7 @@ if [ -n "${PROBE_LANG:-}" ]; then
 fi
 
 status=0
-for args in "plain-two.html bare" "plain-two.html ime" "editor.html?merge=1 bare" "editor.html?merge=1 ime"; do
+for args in "editor.html?merge=1 bare" "editor.html?merge=1 ime" "plain-two.html bare" "plain-two.html ime"; do
   eval "set -- $args"
   export MERGE="$2"
   set -- "$1" ''

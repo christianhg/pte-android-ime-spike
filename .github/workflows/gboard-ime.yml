@@ -22,10 +22,10 @@ jobs:
       fail-fast: false
       matrix:
         # baseline = the published @portabletext/editor in page/package.json (8.2.10), the others are packed tarballs in page/tarballs.
-        variant: [baseline, npm-7.0.1, npm-1.58.1, npm-1.57.5]
+        variant: [npm-1.57.5]
         lang: [ja]
         api: [36]
-        attempt: [1, 2, 3]
+        attempt: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
 
