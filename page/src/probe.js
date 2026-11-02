@@ -81,7 +81,7 @@ const describe = (node) => {
   return `${node.nodeName}[${node.attributes ? [...node.attributes].map((a) => a.name).join(' ') : ''}] connected=${node.isConnected}`
 }
 const captureInput = (e) => {
-  if (window.__inputs.length >= 60) return
+  if (window.__inputs.length >= 200) return
   const field = document.querySelector('[contenteditable="true"]')
   const ranges = typeof e.getTargetRanges === 'function' ? e.getTargetRanges() : []
   const selection = getSelection()
@@ -99,3 +99,20 @@ const captureInput = (e) => {
 for (const type of ['beforeinput', 'input', 'compositionstart', 'compositionend']) {
   window.addEventListener(type, captureInput, true)
 }
+
+// Diagnostic: selection changes and DOM mutations inside the field, to find
+// what restarts the composition after the first letter on iOS.
+document.addEventListener('selectionchange', () => captureInput({type: 'selectionchange'}), true)
+const observeField = () => {
+  const field = document.querySelector('[contenteditable="true"]')
+  if (!field) return setTimeout(observeField, 50)
+  new MutationObserver((records) => {
+    if (window.__inputs.length >= 200) return
+    window.__inputs.push({
+      type: 'mutation',
+      data: records.map((r) => r.type + ':' + describe(r.target) + (r.type === 'childList' ? ' +' + [...r.addedNodes].map(describe).join(',') + ' -' + [...r.removedNodes].map(describe).join(',') : ' old=' + JSON.stringify(r.oldValue))).join(' ; ').slice(0, 1500),
+      t: Date.now(),
+    })
+  }).observe(field, {subtree: true, childList: true, characterData: true, characterDataOldValue: true})
+}
+observeField()
