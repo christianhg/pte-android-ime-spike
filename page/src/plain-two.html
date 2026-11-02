@@ -1,0 +1,27 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>plain-two</title>
+<div id="ed" contenteditable="true" style="border:1px solid #888;min-height:3em;font-size:20px"><p>クロスボーダー・</p><p id="p2">コンサルティング</p></div>
+<pre id="log" style="font-size:10px"></pre>
+<script>
+  const ed = document.getElementById('ed')
+  const events = []
+  for (const t of ['keydown', 'beforeinput', 'input', 'compositionstart', 'compositionupdate', 'compositionend']) {
+    ed.addEventListener(t, (e) => {
+      events.push({type: t, inputType: e.inputType, data: e.data, key: e.key, keyCode: e.keyCode, text: ed.innerText})
+      document.getElementById('log').textContent = events.map((x) => JSON.stringify(x)).join('\n')
+    })
+  }
+  const text = () => [...ed.children].map((p) => p.textContent).join('\n')
+  window.__state = () => ({text: text(), dom: ed.textContent, events})
+  window.__caretToSecond = () => {
+    ed.focus()
+    const p2 = document.getElementById('p2') ?? ed.children[1]
+    const r = document.createRange()
+    r.setStart(p2.firstChild ?? p2, 0)
+    r.collapse(true)
+    getSelection().removeAllRanges()
+    getSelection().addRange(r)
+  }
+</script>

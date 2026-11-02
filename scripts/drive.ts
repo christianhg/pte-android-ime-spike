@@ -189,7 +189,8 @@ function writeJson(path: string, value: unknown): void {
 async function main(): Promise<void> {
   const [page, prefix, out] = process.argv.slice(2) as [string, string, string]
   mkdirSync(out, {recursive: true})
-  const tag = `${page.split('.')[0]}-${prefix ? 'prefix' : 'empty'}`
+  const merge = process.env.MERGE ?? ''
+  const tag = `${page.split(/[.?]/)[0]}-${merge ? `merge-${merge}` : prefix ? 'prefix' : 'empty'}`
   const result: Result = {page, prefix}
   // Say what the driver is blocked on shortly before the shell's timeout kills it.
   watchdog(165)
@@ -240,7 +241,7 @@ async function run(page: string, prefix: string, out: string, tag: string, resul
   info ??= await d.info()
   phase(`uiautomator2 up: ${pyStr(info.productName)} ${pyRepr(await d.windowSize()).replace(/^\[(.*)\]$/, '($1)')}`)
 
-  const url = `http://localhost:${PORT}/${page}?prefix=${prefix}`
+  const url = `http://localhost:${PORT}/${page}${page.includes('?') ? '&' : '?'}prefix=${prefix}`
   setCurrentUrl(url)
   await adb(['shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', url, CHROME])
   phase('chrome launched')
@@ -328,6 +329,10 @@ async function run(page: string, prefix: string, out: string, tag: string, resul
   result.gboard_labels = labels
   phase(`keys found: ${labels.length} labels, sample ${pyRepr(labels.slice(0, 40))}`)
 
+  if (process.env.MERGE) {
+    await mergeCase(d, out, tag, result, process.env.MERGE)
+    return
+  }
   // Romaji on the Japanese QWERTY layout and plain English on the English layout use the same keys.
   await typeWord(d, out, tag, result, '1')
   result.after_first = await cdpEval('window.__state()')
@@ -359,4 +364,48 @@ if (import.meta.main) {
       process.exit(1)
     },
   )
+}
+
+const MERGED = 'クロスボーダー・コンサルティング'
+
+async function tapDelete(d: Device): Promise<void> {
+  const keys = await gboardKeys(d)
+  const label = [...keys.keys()].find((k) => /^(delete|backspace|削除)$/i.test(k))
+  if (!label) throw new Error(`no Gboard delete key; labels: ${pyRepr(pySorted(keys.keys()).slice(0, 80))}`)
+  await d.click(...keys.get(label)!)
+  await sleep(0.6)
+}
+
+/**
+ * Backspace-merge probe: two blocks, caret at the start of the second. 'bare' taps Backspace once.
+ * 'ime' composes kyou there, commits 今日, Backspaces it away, then Backspaces once more to merge.
+ */
+async function mergeCase(d: Device, out: string, tag: string, result: Result, mode: string): Promise<void> {
+  await cdpEval('window.__caretToSecond()')
+  await sleep(1)
+  result.start = await cdpEval('window.__state()')
+  result.start_selection = await cdpEval('(() => { const s = getSelection(); return {anchor: s.anchorNode && s.anchorNode.textContent, offset: s.anchorOffset} })()')
+  const steps: Array<{step: string; text: unknown}> = []
+  const read = async (step: string) => {
+    const st = (await cdpEval('window.__state()')) as PageState
+    steps.push({step, text: st.text})
+    return st
+  }
+  await read('start')
+  if (mode === 'ime') {
+    await typeWord(d, out, tag, result, '1')
+    await read(`committed ${pyStr(result.picked1)}`)
+    await tapDelete(d)
+    await read('backspace 1')
+    await tapDelete(d)
+    await read('backspace 2')
+  }
+  await tapDelete(d)
+  await sleep(1)
+  const state = await read('merge backspace')
+  result.steps = steps
+  result.state = state
+  writeJson(`${out}/${tag}.json`, result)
+  const valid = mode !== 'ime' || result.picked1 === '今日'
+  console.log(`MERGE_RESULT ${tag}: ok=${state.text === MERGED} valid=${valid} picked=${pyStr(result.picked1 ?? '-')} text=${pyRepr(state.text)} steps=${pyRepr(steps.map((x) => `${x.step}=${String(x.text)}`))}`)
 }

@@ -22,10 +22,10 @@ jobs:
       fail-fast: false
       matrix:
         # baseline = the published @portabletext/editor in page/package.json (8.2.10), the others are packed tarballs in page/tarballs.
-        variant: [baseline]
-        lang: [ja, en]
+        variant: [baseline, npm-7.0.1, npm-1.58.1, npm-1.57.5]
+        lang: [ja]
         api: [36]
-        attempt: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        attempt: [1, 2, 3]
     steps:
       - uses: actions/checkout@v4
 
@@ -47,9 +47,11 @@ jobs:
       - name: Build test page
         working-directory: page
         run: |
-          if [ "${{ matrix.variant }}" != baseline ]; then
-            npm pkg set "dependencies.@portabletext/editor=file:tarballs/${{ matrix.variant }}.tgz"
-          fi
+          case "${{ matrix.variant }}" in
+            baseline) ;;
+            npm-*) v="${{ matrix.variant }}"; npm pkg set "dependencies.@portabletext/editor=${v#npm-}" ;;
+            *) npm pkg set "dependencies.@portabletext/editor=file:tarballs/${{ matrix.variant }}.tgz" ;;
+          esac
           npm install --no-audit --no-fund --no-package-lock && npm run build
           node -e "console.log('EDITOR_VERSION', require('./node_modules/@portabletext/editor/package.json').version)"
 

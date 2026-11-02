@@ -97,8 +97,10 @@ if [ -n "${PROBE_LANG:-}" ]; then
 fi
 
 status=0
-for args in "plain.html ''" "editor.html ''" "editor.html x"; do
+for args in "plain-two.html bare" "plain-two.html ime" "editor.html?merge=1 bare" "editor.html?merge=1 ime"; do
   eval "set -- $args"
+  export MERGE="$2"
+  set -- "$1" ''
   log "case $1 prefix='$2' start"
   timeout -k 10 180 node scripts/drive.ts "$1" "$2" "$out" 2>&1 | tee -a "$out/drive.log"
   rc=${PIPESTATUS[0]}
